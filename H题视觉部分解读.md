@@ -105,7 +105,7 @@ timestamp, x_cm, velocity_cm_s, confidence, detected
 
 ### 4.2 分辨率和帧率
 
-建议从 `640×480 @ 60 fps` 或摄像头稳定支持的高帧率模式开始，而不是盲目追求 1080p。
+当前工程统一请求 `640×480 @ 120 fps`，优先利用高帧率降低采样周期，而不是盲目追求 1080p。
 
 若 25 cm 摆杆在画面内占 500 像素，则：
 
@@ -115,7 +115,7 @@ timestamp, x_cm, velocity_cm_s, confidence, detected
 0.1 cm 刻度对应约 2 px
 ```
 
-这对题目规定的 ±1 cm 控制误差已有足够的测量余量。更关键的是低延迟、稳定帧率和不丢帧。建议视觉测量至少达到 30 Hz，优先争取 50～60 Hz；端到端测量延迟尽量控制在 30～50 ms 内。
+这对题目规定的 ±1 cm 控制误差已有足够的测量余量。更关键的是低延迟、稳定帧率和不积压旧帧。摄像头目标帧率统一为 120 FPS；视觉算法应尽量跟上输入，并始终只处理最新帧。端到端测量延迟尽量控制在 30 ms 内。启动日志必须核对硬件实际接受的 FPS，不能只相信设置值。
 
 ## 5. 标定：如何从像素得到厘米
 
@@ -363,7 +363,7 @@ CaptureThread  --最新帧-->  BallVisionThread  --最新状态-->  Control/Seri
 
 原实现最终把结果四舍五入为整数像素，会丢失不必要的精度；本题应一直保留浮点厘米值，到画图时才转整数像素。
 
-还要注意，参考线程最多允许 15 帧纯预测。若按 60 fps 计算，这大约是 250 ms，已经可能足以让钢球发生明显运动。对平衡闭环而言，预测结果只能跨越极短遮挡，建议按“毫秒”而非“帧数”设限，并同时降低置信度。例如：
+还要注意，参考线程最多允许 15 帧纯预测。若按当前 120 FPS 计算，这大约是 125 ms，仍可能足以让钢球发生明显运动。对平衡闭环而言，预测结果只能跨越极短遮挡，建议按“毫秒”而非“帧数”设限，并同时降低置信度。例如：
 
 ```text
 丢失 0～50 ms：允许短时预测，控制动作限幅
@@ -595,18 +595,17 @@ x_cm = (a*u_ball + b) / (c*u_ball + 1)
 
 ### 10.9 建议迁移到当前工程的目录结构
 
-不建议把 `project1` 整个目录复制进来。可按职责选择性重构为：
+不建议把 `project1` 整个目录复制进来。当前主工程统一放在 `project/` 下，可按职责选择性重构为：
 
 ```text
-xbhdcc_camera/
-├── camera.py             # 设备配置、低缓冲采集、时间戳
-├── calibration.py        # 内参加载、畸变矫正、摆杆厘米标定
-├── ball_detector.py      # 钢球候选、几何筛选、置信度
-├── ball_tracker.py       # 一维卡尔曼、速度、短时丢失策略
-├── ball_state.py         # BallState 数据结构
-├── serial_transport.py   # 可选：向独立 MCU 发送状态
-├── recorder.py           # 独立录像线程和文件完整关闭
-├── xbhdcc_tools.py       # 保留/改造现有网页双路推流
+project/
+├── Core/                 # 跨模块数据结构和公共类型
+├── Driver/               # 摄像头、串口等硬件封装
+├── Algorithm/            # 钢球检测、坐标映射、状态滤波
+├── Services/             # 样本、录像、推流等业务服务
+├── Tools/                # 标定、采样和调参入口
+├── Test/                 # 自动化测试
+├── Data/                 # 运行时生成的样本（忽略提交）
 └── main.py               # 线程编排、启动/停止、异常处理
 ```
 
@@ -620,7 +619,178 @@ xbhdcc_camera/
 
 结论：`project1` 最有价值的不是原目标识别结果，而是它已经积累的 **相机标定工具、低延迟队列模式、卡尔曼状态管理、串口封装和调参界面**。这些可以明显缩短基础设施开发时间；钢球检测、摆杆厘米标定和闭环安全策略仍必须针对 H 题重新实现。
 
-## 11. 推荐实施顺序
+## 11. 第一阶段已实现代码：相机与样本采集
+
+当前工程已加入第一阶段最小代码。新增业务代码全部放在 `project/` 中，`xbhdcc_camera/` 暂时只保留原有网页双路推流代码：
+
+```text
+project/
+├── Core/
+│   └── models.py             # CameraConfig、FramePacket
+├── Driver/
+│   ├── camera.py             # 全项目唯一相机封装
+│   ├── my_serial.py          # 现有串口封装
+│   └── calibration/          # 已有棋盘格标定工具和参数
+├── Algorithm/
+│   └── KalmanFilter2D.py     # 现有参考滤波器
+├── Services/
+│   └── sample_storage.py     # 样本会话、元数据、图片和录像存储
+├── Tools/
+│   └── collect_samples.py    # 参数解析和采集流程编排
+├── Test/
+│   ├── test_camera.py
+│   └── test_sample_storage.py
+└── Data/
+    └── samples/              # 运行时自动创建，不提交源码仓库
+```
+
+这里刻意只保留一个 `Camera`。新代码使用 `CameraConfig`、上下文管理器和 `capture_packet()`；旧参考代码仍可继续使用 `Camera().open()` 和 `capture()`，迁移期间不会因为封装升级立即失效。样本文件写入也集中在 `SampleSession`，采集工具不重复实现 JSON、图片命名和录像关闭逻辑。
+
+### 11.1 `camera.py` 已完成的职责
+
+- 支持摄像头编号或 `/dev/videoX` 路径。
+- 配置 MJPG、分辨率、FPS、缓冲深度和画面旋转。
+- 默认加载 `Driver/calibration/camera_calibration.npz`，对原始帧去畸变后再按安装方向旋转。
+- 默认目标模式统一为 `640×480 @ 120 FPS`。
+- 可选设置曝光、增益、白平衡、对焦等 UVC 参数。
+- 打开后读取硬件实际接受的分辨率、FPS 和 FOURCC。
+- 驱动未接受参数时给出警告，不静默假定设置成功。
+- 每个 `FramePacket` 携带递增帧序号和 `time.monotonic()` 时间戳。
+- 支持上下文管理，退出时保证释放摄像头。
+
+当前 `FramePacket` 只负责采集层：
+
+```python
+@dataclass(frozen=True)
+class FramePacket:
+    frame: np.ndarray
+    captured_at: float
+    sequence: int
+```
+
+以后算法线程应直接接收这个对象，而不是只传裸 `numpy` 图像，从而可以计算处理延迟并丢弃过期状态。
+
+### 11.2 样本目录与数据格式
+
+每次启动采集工具会创建独立会话：
+
+```text
+project/Data/samples/20260729_123000_center/
+├── session.json       # 标签、目标位置、请求参数和实际相机参数
+├── samples.jsonl      # 每张图片对应的厘米标签、时间戳和帧序号
+├── frame_0000_seq_00000123.jpg
+├── frame_0001_seq_00000180.jpg
+└── video.avi          # 仅使用 --record-video 时产生
+```
+
+默认保存的是无文字叠加的**已去畸变画面**，预览窗口上的标签和提示不会写进样本，避免干扰后续检测算法。`session.json` 会记录 `images_are_undistorted=true` 及实际使用的标定文件。只有重新采集棋盘格标定原图时才使用 `--no-undistort`。
+
+### 11.3 实际采集命令
+
+先查看帮助：
+
+```bash
+python3 -m project.Tools.collect_samples --help
+```
+
+采集空槽，预览窗口中按 `s` 保存，共保存 20 张后自动退出：
+
+```bash
+python3 -m project.Tools.collect_samples \
+  --device /dev/video0 \
+  --fps 120 \
+  --label empty \
+  --count 20
+```
+
+将钢球放在 O 点，采集 20 张已知 `0 cm` 样本：
+
+```bash
+python3 -m project.Tools.collect_samples \
+  --device /dev/video0 \
+  --label static_ball \
+  --position-cm 0 \
+  --count 20
+```
+
+其他标定位置只需修改 `--position-cm`，建议分别运行：
+
+```text
+-10, -5, 0, +5, +10 cm
+```
+
+例如采集 `-5 cm`：
+
+```bash
+python3 -m project.Tools.collect_samples \
+  --device /dev/video0 \
+  --label static_ball \
+  --position-cm -5 \
+  --count 20
+```
+
+采集钢球完整滚动视频，不提供固定位置标签，按 `q` 结束并正确关闭录像文件：
+
+```bash
+python3 -m project.Tools.collect_samples \
+  --device /dev/video0 \
+  --label rolling_ball \
+  --record-video
+```
+
+在没有桌面窗口的设备上自动采集 30 张 O 点图片，每 0.2 秒一张：
+
+```bash
+python3 -m project.Tools.collect_samples \
+  --device /dev/video0 \
+  --label static_ball \
+  --position-cm 0 \
+  --headless \
+  --count 30 \
+  --interval 0.2
+```
+
+若摄像头倒装，使用 `--rotation 180`。曝光等参数必须先查询实际摄像头支持范围，再按驱动设置，例如：
+
+```bash
+v4l2-ctl -d /dev/video0 --list-formats-ext
+v4l2-ctl -d /dev/video0 --list-ctrls-menus
+```
+
+不同 UVC 驱动对自动曝光数值的定义可能不同，不应直接照搬其他摄像头的 `--auto-exposure` 和 `--exposure` 值。
+
+采集工具默认启用现有标定参数，无需额外添加参数：
+
+```text
+原始摄像头帧
+  -> camera_calibration.npz 去畸变
+  -> 按 --rotation 旋转
+  -> 预览、图片保存和录像
+```
+
+仅在重新拍摄棋盘格、准备重新计算内参时关闭矫正：
+
+```bash
+python3 -m project.Tools.collect_samples \
+  --device /dev/video0 \
+  --label checkerboard_raw \
+  --no-undistort \
+  --count 20
+```
+
+### 11.4 本阶段验收条件
+
+- 实际相机参数没有出现未处理的模式警告。
+- 画面覆盖完整摆杆，±12 cm 附近仍可看到完整钢球。
+- 空槽以及 `-10、-5、0、+5、+10 cm` 每个位置至少有 20 张清晰图片。
+- 每个位置包含不同光照和轻微车体振动条件。
+- 至少有一段钢球从一端滚到另一端的完整视频。
+- 检查 `session.json` 与 `samples.jsonl` 中的厘米标签无误。
+- 连续采集时画面延迟不随运行时间持续增加。
+
+完成这些样本后，下一阶段才能基于真实图像实现 `ball_detector.py` 和 `rod_mapper.py`，而不是预先猜测钢球阈值和映射参数。
+
+## 12. 推荐实施顺序
 
 1. **固定机械与光学条件**：完成摄像头支架、视场、曝光、补光，保证整根摆杆始终清晰可见。
 2. **完成静态标定**：验证 O、±5 cm、±10 cm 的坐标误差，目标是视觉测量误差远小于 1 cm，建议做到 ≤0.2 cm。
@@ -631,7 +801,7 @@ xbhdcc_camera/
 7. **完善图传录像**：验证接收端位于赛道外时仍能实时观看，并逐个回放完整测试视频。
 8. **做极限与故障测试**：低电量、网络断开、短时遮挡、摄像头掉帧、强反光和重新启动。
 
-## 12. 验收清单
+## 13. 验收清单
 
 - [ ] 摄像头画面覆盖完整 25 cm 摆杆和钢球全行程。
 - [ ] 钢球位置检测确实由摄像头完成。
@@ -644,7 +814,7 @@ xbhdcc_camera/
 - [ ] 场外设备能实时显示，且每次测试的视频均完整保存、可回放。
 - [ ] 回传画面能直接判定钢球位置，并显示时间戳和检测状态。
 
-## 13. 最容易失分的点
+## 14. 最容易失分的点
 
 1. 用摄像头做循迹，违反“循迹模块只能使用红外光电模块”的限制。
 2. 图传能看但不能保存，或视频文件无法完整回放。

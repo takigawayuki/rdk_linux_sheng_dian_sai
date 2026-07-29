@@ -7,3 +7,13 @@ __pycache__/
 
 # 忽略项目中所有 avi 视频
 *.avi
+
+# 视觉标定产生的大量原始样本与测试录像
+project/Data/samples/
+recordings/
+
+# 视觉教学工作台构建与测试产物
+project/Workbench/node_modules/
+project/Workbench/dist/
+project/Workbench/test-results/
+project/Workbench/playwright-report/
