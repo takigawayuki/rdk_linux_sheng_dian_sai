@@ -2,7 +2,7 @@
 
 本目录是 H 题“车载平衡滚球运动控制系统”的正式代码目录。
 
-当前只完成了第一步：**摄像头采集、镜头去畸变、样本图片/视频保存**。钢球检测、厘米坐标映射、卡尔曼跟踪和控制通信将在后续步骤逐步加入。
+当前已经跑通前三部分：**摄像头采集与去畸变、钢球检测、厘米映射和短时遮挡跟踪**。现阶段可以用采集视频离线验证完整视觉测量链路；实时相机服务和控制通信尚未接入。
 
 不要把“计划中的文件”误认为已经实现。本文会明确标记每一步的状态。
 
@@ -10,14 +10,14 @@
 
 | 步骤 | 内容 | 当前状态 | 本步最终输出 |
 | --- | --- | --- | --- |
-| 第一步 | 摄像头、120 FPS、去畸变、样本采集 | 代码已完成，等待真机验证 | 带真实厘米标签的清晰图片和滚动视频 |
-| 第二步 | 钢球检测 | 未开始 | 钢球像素中心 `(u, v)` 和置信度 |
-| 第三步 | 摆杆标定和厘米映射 | 未开始 | 相对 O 点的位置 `x_cm` |
-| 第四步 | 一维卡尔曼跟踪和丢球保护 | 未开始 | 平滑位置、速度、检测有效状态 |
+| 第一步 | 摄像头、120 FPS、去畸变、样本采集 | 已完成并采集真机数据 | 带真实厘米标签的清晰图片和滚动视频 |
+| 第二步 | 钢球检测 | 第一版已完成 | 钢球像素中心 `(u, v)` 和置信度 |
+| 第三步 | 摆杆标定和厘米映射 | 第一版已完成 | 相对 O 点的位置 `x_cm` |
+| 第四步 | 一维跟踪和丢球保护 | 第一版已完成 | 平滑位置、速度、检测有效状态 |
 | 第五步 | 串口/控制接口 | 未开始 | 向摆杆控制器发送实时钢球状态 |
 | 第六步 | 图传、录像和完整程序编排 | 未开始 | 可参赛运行的完整视觉程序 |
 
-目前请只执行本文的“第一步”。没有采集到真实钢球图像之前，不应凭空编写和调整钢球阈值。
+当前建议先按第 18～20 节复现离线标定和视频评估，再进入实时相机服务。第一版参数是根据 `Data/samples` 中 640×480、120 FPS、已去畸变的数据确定的。
 
 ## 2. 最终系统会怎样工作
 
@@ -38,14 +38,16 @@
     -> 测试录像
 ```
 
-当前第一步已经跑通到这里：
+当前离线通路已经跑通到这里：
 
 ```text
 摄像头原始帧
     -> 镜头去畸变
     -> 根据安装方向旋转
-    -> 预览
-    -> 保存带厘米标签的图片或视频
+    -> 钢球检测
+    -> 遮挡跟踪
+    -> 厘米映射
+    -> 结果统计/标注视频
 ```
 
 ## 3. 目录结构
@@ -63,7 +65,8 @@ project/
 │   ├── __init__.py
 │   ├── camera.py
 │   ├── my_serial.py
-│   ├── configs/                       # 现有预留目录
+│   ├── configs/
+│   │   └── rod_calibration.json       # 像素到厘米的标定结果
 │   └── calibration/
 │       ├── __init__.py
 │       ├── CameraTest_Cali_qipan.py
@@ -72,7 +75,10 @@ project/
 │
 ├── Algorithm/
 │   ├── __init__.py
-│   └── KalmanFilter2D.py
+│   ├── KalmanFilter2D.py               # 旧参考代码，当前通路未使用
+│   ├── ball_detector.py                # 凹槽 ROI + 圆检测
+│   ├── ball_tracker.py                 # 一维跟踪和遮挡保护
+│   └── rod_mapper.py                   # 像素/厘米映射
 │
 ├── Services/
 │   ├── __init__.py
@@ -80,7 +86,9 @@ project/
 │
 ├── Tools/
 │   ├── __init__.py
-│   └── collect_samples.py
+│   ├── collect_samples.py              # 真机采集
+│   ├── calibrate_rod.py                # 静态样本拟合映射
+│   └── evaluate_vision.py              # 视频离线评估
 │
 ├── Workbench/                       # 3D视觉教学与仿真前端
 │   ├── src/
@@ -91,6 +99,9 @@ project/
 ├── Test/
 │   ├── __init__.py
 │   ├── test_camera.py
+│   ├── test_ball_detector.py
+│   ├── test_ball_tracker.py
+│   ├── test_rod_mapper.py
 │   ├── test_sample_storage.py
 │   └── test_undistorter.py
 │
@@ -364,7 +375,7 @@ python3 -m unittest discover -s project/Test -t . -v
 正常结果应看到：
 
 ```text
-Ran 9 tests
+Ran 19 tests
 OK
 ```
 
@@ -630,25 +641,20 @@ Camera: {"width": 640, "height": 480, "fps": 120.0, ...}
 
 ## 18. 第二步：钢球检测
 
-状态：**未实现**。
+状态：**第一版已实现并通过现有样本验证**。
 
-计划新增：
+对应文件：
 
 ```text
-Algorithm/BallDetector.py
-Tools/tune_ball_detector.py
+Algorithm/ball_detector.py
 Test/test_ball_detector.py
 ```
 
-主要工作：
+`BallDetector` 只处理凹槽附近的窄 ROI，再用圆半径、预期轨迹中心线和时间预测位置筛选候选。这样手出现在凹槽下方或侧面时，不会因为占据大量画面而主导检测。
 
-1. 读取第一步采集的空槽和钢球图片。
-2. 确定摆杆 ROI。
-3. 使用背景差分、轮廓面积、圆度和尺寸筛选钢球。
-4. 输出像素中心 `(u, v)`、置信度和检测状态。
-5. 使用固定样本建立回归测试。
+当前固定参数以 640×480 无畸变画面为参考，其他等比例分辨率会缩放 ROI 和半径。更换相机安装角度、焦距或摆杆后必须重新检查参数。
 
-第二步验收输出：
+输出结构：
 
 ```text
 BallDetection(pixel_x, pixel_y, confidence, detected)
@@ -656,24 +662,23 @@ BallDetection(pixel_x, pixel_y, confidence, detected)
 
 ## 19. 第三步：摆杆标定与厘米映射
 
-状态：**未实现**。
+状态：**第一版线性映射已实现**。
 
-计划新增：
+重新从静态样本拟合标定：
 
-```text
-Algorithm/RodMapper.py
-Tools/calibrate_rod.py
-Driver/configs/rod_calibration.json
-Test/test_rod_mapper.py
+```bash
+python3 -m project.Tools.calibrate_rod
 ```
 
-主要工作：
+命令会自动读取 `Data/samples` 中带 `position_cm` 标签的静态样本，先检测每张图的钢球中心，再拟合：
 
-1. 使用第一步的 `-10、-5、0、+5、+10 cm` 样本建立对应点。
-2. 先验证一维线性映射。
-3. 误差不满足时再使用一维射影或二维单应性。
-4. 输出相对于 O 点的 `x_cm`。
-5. 统计最大绝对误差和均方误差。
+```text
+x_cm = 0.038896469 × u - 12.117028
+```
+
+并写入 `Driver/configs/rod_calibration.json`。当前五个标定点全部 20/20 检测成功，拟合 RMSE 为 0.0665 cm，最大标定点残差为 0.0890 cm。注意这只是标定点残差，不是独立测试集上的最终精度。
+
+目前一维线性映射已经足够，不需要为了形式强行使用二维透视变换。若相机位置改变、杆在画面中明显倾斜或线性残差变大，再考虑一维射影/单应性。
 
 第三步验收输出：
 
@@ -683,22 +688,63 @@ Test/test_rod_mapper.py
 
 ## 20. 第四步：钢球跟踪与丢球保护
 
-状态：**未实现**。
+状态：**第一版 alpha-beta 跟踪和遮挡保护已实现**。
 
-计划新增：
+对应文件：
 
 ```text
-Algorithm/BallTracker.py
-Core/ball_state.py
+Algorithm/ball_tracker.py
 Test/test_ball_tracker.py
 ```
 
-主要工作：
+遮挡策略：
 
-1. 建立一维状态 `[x_cm, vx_cm_s]`。
-2. 使用真实帧时间戳更新 `dt`。
-3. 短时丢球允许有限预测并降低置信度。
-4. 超时后将状态标记为无效。
+1. 手进入画面但没有盖住球：窄 ROI、圆尺寸、杆中心线和预测位置共同排除干扰。
+2. 手完全盖住球：单摄像头没有真实观测，只允许最多 0.12 s 的位置/速度短时预测，置信度持续下降。
+3. 超过 0.12 s：输出 `valid=False`，控制器必须进入丢球保护，不能继续使用猜测位置。
+4. 重新出现：候选必须连续两帧位置一致才确认，避免单帧手指高光或螺丝被误认为钢球；确认延迟约 8.3 ms（120 FPS）。
+
+不能承诺“手完全遮住多久都能跟踪”。要在长期完全遮挡时继续获得真值，只能增加另一视角摄像头或减少遮挡，这是可观测性的限制，不是换一种 PID 或视觉公式就能解决。
+
+### 20.1 运行完整视频评估
+
+```bash
+python3 -m project.Tools.evaluate_vision \
+  project/Data/samples/20260730_070947_rolling_ball/video.avi \
+  --calibration project/Driver/configs/rod_calibration.json
+```
+
+作用：按视频原始 FPS 运行“检测 -> 遮挡跟踪 -> 厘米映射”，输出原始检测率、加入预测后的有效率、最长预测/丢失段、位置范围和离线处理速度。
+
+当前 1132 帧视频结果：
+
+```text
+raw_detected: 1035/1132 = 91.4%
+valid after tracking: 1067/1132 = 94.3%
+longest prediction: 116.7 ms
+lost runs >= 3 frames: 0-11, 1079-1131
+processing: about 97 FPS on the current machine
+```
+
+尾部第 1079 帧以后钢球已经离开画面，手仍在附近，程序保持 LOST 而没有误锁到手；开头 12 帧也没有稳定钢球候选。离线处理约 97 FPS 不等于相机只能拍 97 FPS：视频文件解码和 Hough 检测目前尚未达到 120 FPS 实时预算，后续实时化还要优化。
+
+### 20.2 生成短标注预览
+
+```bash
+python3 -m project.Tools.evaluate_vision \
+  project/Data/samples/20260730_070947_rolling_ball/video.avi \
+  --calibration project/Driver/configs/rod_calibration.json \
+  --max-frames 300 \
+  --output-video /tmp/h_ball_preview.avi
+```
+
+作用：只处理前 300 帧，并输出带 ROI、球心、状态、厘米位置和速度的调试视频。`DETECTED` 是当帧真实检测，`PREDICTED` 是短遮挡预测，`LOST` 表示当前结果不可用于闭环控制。
+
+### 20.3 当前数据限制
+
+- 画面可以先完成 `-10～+10 cm` 的通路；左右极限较紧，完整 ±12 cm 可能接近或超出画面边缘。
+- 后续若题目需要可靠覆盖完整量程，应把相机稍微移远，再采集 `-12、-10、-5、0、+5、+10、+12 cm` 独立验证数据。
+- 手遮挡测试还应单独录制：不遮挡、短遮挡 50 ms、100 ms、200 ms，以及球从遮挡后重新出现。不能只用当前滚动视频代替专门验收。
 
 ## 21. 第五步：控制器通信
 

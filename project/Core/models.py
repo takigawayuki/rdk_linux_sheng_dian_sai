@@ -54,3 +54,40 @@ class FramePacket:
     frame: np.ndarray
     captured_at: float
     sequence: int
+
+
+@dataclass(frozen=True)
+class BallDetection:
+    """One frame's steel-ball detection in undistorted image coordinates."""
+
+    detected: bool
+    pixel_x: Optional[float] = None
+    pixel_y: Optional[float] = None
+    radius_px: Optional[float] = None
+    confidence: float = 0.0
+    candidate_count: int = 0
+   
+
+@dataclass(frozen=True)
+class BallMeasurement:
+    """Mapped ball position passed from vision toward tracking/control."""
+
+    captured_at: float
+    sequence: int
+    position_cm: Optional[float]
+    confidence: float
+    detected: bool
+
+
+@dataclass(frozen=True)
+class BallTrack:
+    """Temporally filtered pixel state with explicit short-occlusion status."""
+
+    valid: bool
+    pixel_x: Optional[float] = None
+    pixel_y: Optional[float] = None
+    velocity_x_px_s: float = 0.0
+    confidence: float = 0.0
+    detected: bool = False
+    predicted: bool = False
+    missed_seconds: float = 0.0
