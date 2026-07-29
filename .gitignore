@@ -1,0 +1,9 @@
+# vscode
+.vscode/
+
+# Python缓存
+__pycache__/
+*.pyc
+
+# 忽略项目中所有 avi 视频
+*.avi
