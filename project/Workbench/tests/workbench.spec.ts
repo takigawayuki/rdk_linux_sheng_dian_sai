@@ -21,6 +21,21 @@ async function canvasHasRenderedPixels(page: import("@playwright/test").Page) {
   });
 }
 
+async function canvas2DHasRenderedPixels(page: import("@playwright/test").Page) {
+  return page.locator("#physics-diagram").evaluate((canvas: HTMLCanvasElement) => {
+    const ctx = canvas.getContext("2d");
+    if (!ctx || canvas.width < 2 || canvas.height < 2) return false;
+    const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+    const colors = new Set<string>();
+    const stride = Math.max(4, Math.floor(pixels.length / 400 / 4) * 4);
+    for (let index = 0; index < pixels.length; index += stride) {
+      colors.add(`${pixels[index]},${pixels[index + 1]},${pixels[index + 2]},${pixels[index + 3]}`);
+      if (colors.size >= 5) return true;
+    }
+    return false;
+  });
+}
+
 test("3D scene renders and calibration workflow updates", async ({ page }, testInfo) => {
   await page.goto("/", { waitUntil: "domcontentloaded" });
   await expect(page.getByRole("heading", { name: "滚球视觉实验台" })).toBeVisible();
@@ -45,6 +60,11 @@ test("3D scene renders and calibration workflow updates", async ({ page }, testI
 test("simulation runs and layout remains separated", async ({ page }, testInfo) => {
   await page.goto("/", { waitUntil: "domcontentloaded" });
   await page.locator(".stage-tab[data-stage='simulation']").click();
+  await expect(page.locator("#sim-feedforward-out")).not.toHaveText("0.00°");
+  await page.locator("#sim-feedforward").uncheck();
+  await expect(page.locator("#sim-feedforward-out")).toHaveText("0.00°");
+  await page.locator("#sim-feedforward").check();
+  await expect(page.locator("#sim-feedforward-out")).not.toHaveText("0.00°");
   await page.locator("#sim-target").fill("5");
   await page.locator("#sim-play").click();
   await expect(page.locator("#sim-play")).toContainText("暂停");
@@ -65,4 +85,25 @@ test("simulation runs and layout remains separated", async ({ page }, testInfo) 
   await page.locator("#sim-play").click();
   await expect(page.locator("#sim-play")).toContainText("运行");
   await page.screenshot({ path: testInfo.outputPath("simulation.png") });
+});
+
+test("force diagram explains frames and acceleration balance", async ({ page }, testInfo) => {
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await page.locator(".stage-tab[data-stage='physics']").click();
+  await expect(page.locator("#physics-diagram")).toBeVisible();
+  await page.waitForTimeout(300);
+  expect(await canvas2DHasRenderedPixels(page)).toBeTruthy();
+
+  await page.locator("[data-physics-frame='ground']").click();
+  await expect(page.locator("#physics-frame-label")).toContainText("惯性系");
+  await expect(page.locator("#physics-equation-balance")).toContainText("a球,x = a车");
+
+  await page.locator("#physics-car-accel").fill("2");
+  await page.locator("#physics-use-balance").click();
+  const relativeAcceleration = Number.parseFloat(await page.locator("#physics-relative-accel").innerText());
+  expect(Math.abs(relativeAcceleration)).toBeLessThan(0.1);
+  const balanceAngle = Number.parseFloat(await page.locator("#physics-balance-angle").innerText());
+  expect(balanceAngle).toBeCloseTo(11.53, 1);
+
+  await page.screenshot({ path: testInfo.outputPath("physics.png") });
 });

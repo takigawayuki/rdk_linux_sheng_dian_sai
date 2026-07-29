@@ -22,6 +22,7 @@ export class WorkbenchScene {
 
   private readonly host: HTMLElement;
   private readonly cameraBody: THREE.Group;
+  private readonly accelerationArrow: THREE.ArrowHelper;
   private cameraHelper: THREE.CameraHelper;
   private ballX = 0;
   private settings: SensorSettings = { height: 15, angleDeg: 12, fov: 48, k1: -0.08, noise: 0.2 };
@@ -40,7 +41,7 @@ export class WorkbenchScene {
     });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setClearColor(0x171a17, 1);
-    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.enabled = !navigator.webdriver;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.domElement.dataset.testid = "three-canvas";
     host.appendChild(this.renderer.domElement);
@@ -76,6 +77,17 @@ export class WorkbenchScene {
     const grid = new THREE.GridHelper(50, 50, 0x4b574b, 0x30362f);
     grid.position.y = -0.7;
     this.scene.add(grid);
+
+    this.accelerationArrow = new THREE.ArrowHelper(
+      new THREE.Vector3(1, 0, 0),
+      new THREE.Vector3(-4, 0.05, -3.2),
+      4,
+      0xf1b84b,
+      0.7,
+      0.35,
+    );
+    this.accelerationArrow.visible = false;
+    this.scene.add(this.accelerationArrow);
 
     this.buildRod();
     this.ball = this.buildBall();
@@ -147,7 +159,7 @@ export class WorkbenchScene {
       new THREE.MeshStandardMaterial({ color: 0x40463f, metalness: 0.45, roughness: 0.38 }),
     );
     hinge.rotation.x = Math.PI / 2;
-    hinge.position.set(-12.5, -0.05, 0);
+    hinge.position.set(0, -0.05, 0);
     this.rodGroup.add(hinge);
   }
 
@@ -203,7 +215,17 @@ export class WorkbenchScene {
   }
 
   setRodTilt(degrees: number) {
-    this.rodGroup.rotation.z = THREE.MathUtils.degToRad(degrees);
+    // The model defines positive tilt as lowering the +x end of the rail.
+    this.rodGroup.rotation.z = -THREE.MathUtils.degToRad(degrees);
+  }
+
+  setVehicleAcceleration(accelerationMps2: number) {
+    const magnitude = Math.abs(accelerationMps2);
+    this.accelerationArrow.visible = magnitude >= 0.01;
+    if (!this.accelerationArrow.visible) return;
+    this.accelerationArrow.setDirection(new THREE.Vector3(Math.sign(accelerationMps2), 0, 0));
+    this.accelerationArrow.position.x = accelerationMps2 >= 0 ? -4 : 4;
+    this.accelerationArrow.setLength(Math.min(7, 1.8 + magnitude * 1.5), 0.7, 0.35);
   }
 
   setCalibrationPositions(positions: number[]) {

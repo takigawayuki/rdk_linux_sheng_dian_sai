@@ -222,6 +222,87 @@ input[type="range"] { width: 100%; accent-color: #1e9b65; }
 .number-row { display: grid; grid-template-columns: 1fr 82px 24px; align-items: center; gap: 6px; min-height: 38px; font-size: 10px; }
 .number-row input { width: 82px; height: 30px; padding: 0 7px; border: 1px solid #cbd0c8; border-radius: 4px; background: #fff; }
 .number-row em { color: #7e857d; font-size: 9px; font-style: normal; }
+.switch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 48px;
+  margin: 5px 0 8px;
+  padding: 7px 0;
+  border-top: 1px solid #e0e3de;
+  border-bottom: 1px solid #e0e3de;
+}
+.switch-row > span { display: flex; flex-direction: column; gap: 3px; }
+.switch-row strong { font-size: 10px; }
+.switch-row small { color: #858c84; font-size: 9px; }
+.switch-row input { width: 34px; height: 18px; accent-color: #1e9b65; }
+.gain-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; }
+.gain-grid label { display: grid; grid-template-columns: 22px 1fr; align-items: center; gap: 4px; font-size: 10px; }
+.gain-grid input { width: 100%; min-width: 0; height: 30px; padding: 0 5px; border: 1px solid #cbd0c8; border-radius: 4px; background: #fff; }
+.physics-formula { display: grid; gap: 6px; }
+.physics-formula code { white-space: normal; line-height: 1.45; }
+.physics-formula sub { font-size: 8px; }
+.physics-metrics { grid-template-columns: 1fr 1fr; }
+.physics-metrics strong { font-size: 11px; }
+.physics-board {
+  position: absolute;
+  inset: 0;
+  display: none;
+  grid-template-rows: 54px minmax(0, 1fr) auto;
+  color: #20241f;
+  background: #eef1eb;
+}
+.physics-board-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 22px;
+  border-bottom: 1px solid #cdd3ca;
+  background: #f8f9f6;
+}
+.physics-board-heading span { color: #667067; font-size: 11px; }
+.physics-board-heading strong { color: #176d49; font-size: 12px; }
+#physics-diagram { display: block; width: 100%; height: 100%; min-height: 0; }
+.physics-equation-band {
+  display: grid;
+  grid-template-columns: 1.25fr 1fr .8fr;
+  gap: 1px;
+  padding: 1px 0 0;
+  background: #cfd4cc;
+  border-top: 1px solid #cfd4cc;
+}
+.physics-equation-band code {
+  display: flex;
+  align-items: center;
+  min-height: 54px;
+  padding: 10px 14px;
+  color: #e8ece6;
+  background: #272c28;
+  font-size: 10px;
+  line-height: 1.5;
+  white-space: normal;
+}
+.physics-frame-switch { grid-template-columns: repeat(2, 1fr); margin-bottom: 10px; }
+.physics-balance-button { width: 100%; margin-top: 10px; }
+.physics-results { grid-template-columns: 1fr 1fr; }
+.physics-purpose { display: grid; gap: 4px; margin-top: 10px; padding: 10px; border-left: 3px solid #d79a26; background: #ebece7; }
+.physics-purpose strong { font-size: 10px; }
+.physics-purpose span { color: #667067; font-size: 9px; line-height: 1.5; }
+.section-physics { display: none; }
+.workspace[data-stage="physics"] #scene-host,
+.workspace[data-stage="physics"] .scene-toolbar,
+.workspace[data-stage="physics"] .scene-title,
+.workspace[data-stage="physics"] .camera-monitor,
+.workspace[data-stage="physics"] .plot-monitor { display: none; }
+.workspace[data-stage="physics"] .physics-board { display: grid; }
+.workspace[data-stage="physics"] .section-physics { display: block; }
+.workspace[data-stage="physics"] .section-position,
+.workspace[data-stage="physics"] .section-camera,
+.workspace[data-stage="physics"] .section-calibration,
+.workspace[data-stage="physics"] .section-mapping,
+.workspace[data-stage="physics"] .section-simulation { display: none; }
 
 .workspace[data-stage="overview"] .section-calibration,
 .workspace[data-stage="overview"] .section-mapping,
@@ -284,5 +365,9 @@ input[type="range"] { width: 100%; accent-color: #1e9b65; }
   .scene-title { left: 10px; top: 10px; }
   .scene-toolbar { top: 8px; right: 8px; }
   .inspector-heading, .control-section { padding-left: 12px; padding-right: 12px; }
+  .physics-board { grid-template-rows: 48px minmax(0, 1fr) auto; }
+  .physics-board-heading { align-items: flex-start; flex-direction: column; justify-content: center; gap: 2px; padding: 0 10px; }
+  .physics-board-heading strong { font-size: 10px; }
+  .physics-equation-band { grid-template-columns: 1fr; }
+  .physics-equation-band code { min-height: 34px; padding: 6px 9px; font-size: 8px; }
 }
-
