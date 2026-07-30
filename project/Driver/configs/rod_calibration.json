@@ -3,62 +3,62 @@
   "model": "linear_1d",
   "input_coordinate": "undistorted_pixel_x",
   "output_coordinate": "position_cm_relative_to_O",
-  "slope_cm_per_px": 0.03889646931446262,
-  "intercept_cm": -12.117028376051993,
+  "slope_cm_per_px": -0.03901462126554301,
+  "intercept_cm": 12.16670976072276,
   "valid_range_cm": [
     -12.5,
     12.5
   ],
   "calibration_points": [
     {
-      "session": "20260730_065926_static_ball",
+      "session": "20260730_224101_static_ball",
       "position_cm": -10.0,
-      "pixel_x": 56.10000228881836,
-      "pixel_x_std": 2.4664290128184323,
-      "mean_confidence": 0.8724266641128484,
+      "pixel_x": 569.25,
+      "pixel_x_std": 1.7898135381746942,
+      "mean_confidence": 0.13061787451900692,
       "detected_images": 20,
       "total_images": 20,
-      "fit_error_cm": 0.06506364151631416
+      "fit_error_cm": -0.04236339468759809
     },
     {
-      "session": "20260730_070120_static_ball",
+      "session": "20260730_224125_static_ball",
       "position_cm": -5.0,
-      "pixel_x": 182.0500030517578,
-      "pixel_x_std": 1.1999608643924726,
-      "mean_confidence": 0.8436862256390846,
-      "detected_images": 20,
-      "total_images": 20,
-      "fit_error_cm": -0.035926018651468716
-    },
-    {
-      "session": "20260730_070241_static_ball",
-      "position_cm": 0.0,
-      "pixel_x": 310.75,
+      "pixel_x": 439.45001220703125,
       "pixel_x_std": 1.020103694672066,
-      "mean_confidence": 0.7993572577410288,
+      "mean_confidence": 0.5990593868103684,
       "detected_images": 20,
       "total_images": 20,
-      "fit_error_cm": -0.029950536582733278
+      "fit_error_cm": 0.02173396932718319
     },
     {
-      "session": "20260730_070341_static_ball",
+      "session": "20260730_223956_static_ball",
+      "position_cm": 0.0,
+      "pixel_x": 309.6499938964844,
+      "pixel_x_std": 1.9515372468542467,
+      "mean_confidence": 0.8459668218591807,
+      "detected_images": 20,
+      "total_images": 20,
+      "fit_error_cm": 0.08583252397371766
+    },
+    {
+      "session": "20260730_224216_static_ball",
       "position_cm": 5.0,
-      "pixel_x": 437.8000030517578,
-      "pixel_x_std": 1.6853694250739757,
-      "mean_confidence": 0.8815288372081316,
+      "pixel_x": 185.35000610351562,
+      "pixel_x_std": 1.5202303450894536,
+      "mean_confidence": 0.6782190841237397,
       "detected_images": 20,
       "total_images": 20,
-      "fit_error_cm": -0.08815399147765568
+      "fit_error_cm": -0.06465052897198742
     },
     {
-      "session": "20260730_070511_static_ball",
+      "session": "20260730_224239_static_ball",
       "position_cm": 10.0,
-      "pixel_x": 570.9000244140625,
-      "pixel_x_std": 2.1520352533209293,
-      "mean_confidence": 0.8927515121850351,
+      "pixel_x": 55.55000305175781,
+      "pixel_x_std": 2.1294311253593676,
+      "mean_confidence": 0.2129187125023287,
       "detected_images": 20,
       "total_images": 20,
-      "fit_error_cm": 0.08896690519554973
+      "fit_error_cm": -0.0005525696413286596
     }
   ],
   "metadata": {
@@ -66,8 +66,8 @@
     "image_height": 480,
     "images_are_undistorted": true,
     "camera_calibration_file": "/home/sunrise/rdk_linux_sheng_dian_sai/project/Driver/calibration/camera_calibration.npz",
-    "rmse_cm": 0.06649395060999051,
-    "max_error_cm": 0.08896690519554973,
+    "rmse_cm": 0.052562802500318175,
+    "max_error_cm": 0.08583252397371766,
     "calibrated_range_cm": [
       -10.0,
       10.0

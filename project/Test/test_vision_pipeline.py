@@ -56,9 +56,9 @@ class VisionPipelineTests(unittest.TestCase):
                 target_position_cm=2.0,
             )
         measurement = result.measurement
-        self.assertAlmostEqual(measurement.position_cm, -1.0)
-        self.assertAlmostEqual(measurement.velocity_cm_s, -2.0)
-        self.assertAlmostEqual(measurement.error_cm, 3.0)
+        self.assertAlmostEqual(measurement.position_cm, 1.0)
+        self.assertAlmostEqual(measurement.velocity_cm_s, 2.0)
+        self.assertAlmostEqual(measurement.error_cm, 1.0)
         self.assertTrue(measurement.valid)
         self.assertEqual(measurement.sequence, 12)
 
@@ -73,15 +73,15 @@ class VisionPipelineTests(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as directory:
             pipeline = self.make_pipeline(
-                directory, track, position_direction=1.0, position_scale=0.5
+                directory, track, position_direction=-1.0, position_scale=0.5
             )
             result = pipeline.process(
                 FramePacket(np.zeros((10, 10, 3), dtype=np.uint8), 1.5, 12),
                 target_position_cm=2.0,
             )
-        self.assertAlmostEqual(result.measurement.position_cm, 0.5)
-        self.assertAlmostEqual(result.measurement.velocity_cm_s, 1.0)
-        self.assertAlmostEqual(result.measurement.error_cm, 1.5)
+        self.assertAlmostEqual(result.measurement.position_cm, -0.5)
+        self.assertAlmostEqual(result.measurement.velocity_cm_s, -1.0)
+        self.assertAlmostEqual(result.measurement.error_cm, 2.5)
 
     def test_lost_track_has_no_position_or_error(self):
         with tempfile.TemporaryDirectory() as directory:

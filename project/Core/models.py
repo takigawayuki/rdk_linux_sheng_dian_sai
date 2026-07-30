@@ -54,6 +54,8 @@ class FramePacket:
     frame: np.ndarray
     captured_at: float
     sequence: int
+    read_seconds: float = 0.0
+    preprocess_seconds: float = 0.0
 
 
 @dataclass(frozen=True)

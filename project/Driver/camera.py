@@ -138,27 +138,45 @@ class Camera:
             self._set(name, property_id, value)
 
     def capture_packet(self) -> FramePacket:
+        """Read and preprocess one frame synchronously for compatibility callers."""
+        return self.preprocess_packet(self.capture_raw_packet())
+
+    def capture_raw_packet(self) -> FramePacket:
+        """Read one raw BGR frame without undistortion or rotation."""
         if not self.is_opened or self.cvcap is None:
             raise CameraError("camera is not open")
 
+        read_started = time.monotonic()
         success, frame = self.cvcap.read()
         captured_at = time.monotonic()
         if not success or frame is None:
             raise CameraError("camera opened but failed to read a frame")
 
+        packet = FramePacket(
+            frame=frame,
+            captured_at=captured_at,
+            sequence=self._sequence,
+            read_seconds=captured_at - read_started,
+        )
+        self._sequence += 1
+        return packet
+
+    def preprocess_packet(self, packet: FramePacket) -> FramePacket:
+        """Apply calibration and rotation without blocking the next camera read."""
+        frame = packet.frame
+        preprocess_started = time.monotonic()
         if self._undistorter is not None:
             try:
                 frame = self._undistorter.apply(frame)
             except (cv2.error, ValueError) as error:
                 raise CameraError(f"failed to undistort camera frame: {error}") from error
         frame = self._rotate(frame)
-        packet = FramePacket(
+        preprocess_finished = time.monotonic()
+        return replace(
+            packet,
             frame=frame,
-            captured_at=captured_at,
-            sequence=self._sequence,
+            preprocess_seconds=preprocess_finished - preprocess_started,
         )
-        self._sequence += 1
-        return packet
 
     def capture(self, resize=None):
         """Return a bare frame or None, preserving the previous wrapper API."""

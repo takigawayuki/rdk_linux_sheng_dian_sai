@@ -27,6 +27,25 @@ class FailingCamera:
         raise OSError("camera disconnected")
 
 
+class SlowPreprocessCamera:
+    def __init__(self):
+        self.sequence = 0
+
+    def capture_raw_packet(self):
+        time.sleep(0.001)
+        packet = FramePacket(
+            frame=np.zeros((2, 2, 3), dtype=np.uint8),
+            captured_at=time.monotonic(),
+            sequence=self.sequence,
+        )
+        self.sequence += 1
+        return packet
+
+    def preprocess_packet(self, packet):
+        time.sleep(0.012)
+        return packet
+
+
 class LatestFrameCaptureTests(unittest.TestCase):
     def test_returns_newest_frame_without_queueing_old_frames(self):
         capture = LatestFrameCapture(FakeCamera()).start()
@@ -42,8 +61,20 @@ class LatestFrameCaptureTests(unittest.TestCase):
     def test_propagates_capture_thread_failure(self):
         capture = LatestFrameCapture(FailingCamera()).start()
         try:
-            with self.assertRaisesRegex(RuntimeError, "capture thread failed"):
+            with self.assertRaisesRegex(RuntimeError, "pipeline thread failed"):
                 capture.wait_for_frame(timeout=0.2)
+        finally:
+            capture.stop()
+
+    def test_raw_capture_continues_while_slow_preprocess_drops_old_frames(self):
+        capture = LatestFrameCapture(SlowPreprocessCamera()).start()
+        try:
+            first = capture.wait_for_frame(timeout=0.2)
+            time.sleep(0.05)
+            latest = capture.wait_for_frame(first.sequence, timeout=0.2)
+            self.assertGreater(latest.sequence, first.sequence)
+            self.assertGreater(capture.captured_count, capture.preprocessed_count)
+            self.assertGreater(capture.preprocess_skipped_count, 0)
         finally:
             capture.stop()
 

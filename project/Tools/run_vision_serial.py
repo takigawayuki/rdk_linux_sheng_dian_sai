@@ -27,6 +27,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--serial-port", required=True, help="for example /dev/ttyS1")
     parser.add_argument("--baudrate", type=int, default=115200)
     parser.add_argument("--device", default="/dev/video0")
+    parser.add_argument("--width", type=int, default=640)
+    parser.add_argument("--height", type=int, default=480)
+    parser.add_argument("--fps", type=float, default=120.0)
+    parser.add_argument("--fourcc", default="MJPG")
+    parser.add_argument("--buffer-size", type=int, default=1)
+    parser.add_argument("--no-undistort", action="store_true")
+    parser.add_argument("--auto-exposure", type=float)
+    parser.add_argument("--exposure", type=float)
+    parser.add_argument("--gain", type=float)
     parser.add_argument("--target-cm", type=float, default=0.0)
     parser.add_argument(
         "--position-direction",
@@ -97,19 +106,39 @@ def main() -> int:
         raise SystemExit("--preview-fps must be positive; use --headless to disable it")
     if args.position_scale <= 0:
         raise SystemExit("--position-scale must be positive")
+    if args.width <= 0 or args.height <= 0 or args.fps <= 0:
+        raise SystemExit("camera width, height and FPS must be positive")
+    if len(args.fourcc) != 4:
+        raise SystemExit("--fourcc must contain exactly four characters")
+    if args.buffer_size <= 0:
+        raise SystemExit("--buffer-size must be positive")
     pipeline = VisionPipeline(
         args.calibration,
         position_direction=args.position_direction,
         position_scale=args.position_scale,
     )
-    camera_config = CameraConfig(device=args.device, width=640, height=480, fps=120.0)
+    camera_config = CameraConfig(
+        device=args.device,
+        width=args.width,
+        height=args.height,
+        fps=args.fps,
+        fourcc=args.fourcc,
+        buffer_size=args.buffer_size,
+        undistort=not args.no_undistort,
+        auto_exposure=args.auto_exposure,
+        exposure=args.exposure,
+        gain=args.gain,
+    )
     processed = sent = 0
     started = time.monotonic()
     last_log_at = started
+    last_log_processed = 0
+    last_log_captured = 0
     last_preview_at = 0.0
     last_valid = None
     timing_samples = 0
-    capture_seconds = vision_seconds = serial_seconds = ui_seconds = 0.0
+    wait_seconds = read_seconds = preprocess_seconds = 0.0
+    vision_seconds = serial_seconds = ui_seconds = 0.0
     skipped_frames = 0
     last_sequence = -1
     try:
@@ -124,8 +153,14 @@ def main() -> int:
                 f"undistorted={actual['undistortion'].get('enabled', False)}",
                 flush=True,
             )
+            if args.no_undistort:
+                print(
+                    "camera warning: undistortion disabled for timing diagnostics; "
+                    "mapped centimetre positions are not valid for control",
+                    flush=True,
+                )
             print(
-                f"coordinates right-positive direction={args.position_direction:+.0f} "
+                f"coordinates calibration-label direction={args.position_direction:+.0f} "
                 f"scale={args.position_scale:g} error=target-position",
                 flush=True,
             )
@@ -165,7 +200,9 @@ def main() -> int:
                         quit_requested = cv2.waitKey(1) & 0xFF == ord("q")
                     now = time.monotonic()
                     timing_samples += 1
-                    capture_seconds += capture_finished - loop_started
+                    wait_seconds += capture_finished - loop_started
+                    read_seconds += packet.read_seconds
+                    preprocess_seconds += packet.preprocess_seconds
                     vision_seconds += vision_finished - capture_finished
                     serial_seconds += serial_finished - vision_finished
                     ui_seconds += now - serial_finished
@@ -187,24 +224,34 @@ def main() -> int:
                         error = (
                             "--" if measurement.error_cm is None else f"{measurement.error_cm:+.2f}cm"
                         )
-                        rate = processed / max(now - started, 1e-9)
+                        window_seconds = max(now - last_log_at, 1e-9)
+                        capture_count = capture.captured_count
+                        tx_fps = (processed - last_log_processed) / window_seconds
+                        camera_fps = (capture_count - last_log_captured) / window_seconds
+                        average_fps = processed / max(now - started, 1e-9)
                         timing_divisor = max(1, timing_samples)
                         print(
                             f"TX seq={measurement.sequence & 0xFFFF:05d} "
                             f"status={status:<9} position={position:>8} "
                             f"error={error:>8} velocity={measurement.velocity_cm_s:+7.2f}cm/s "
                             f"confidence={measurement.confidence:.2f} "
-                            f"sent={sent} rate={rate:.1f}Hz "
-                            f"camera={capture.measured_fps:.1f}Hz skipped={skipped_frames} "
-                            f"ms[wait={capture_seconds / timing_divisor * 1000:.1f} "
+                            f"sent={sent} tx_fps={tx_fps:.1f} camera_fps={camera_fps:.1f} "
+                            f"avg={average_fps:.1f} skipped={skipped_frames} "
+                            f"preprocess_dropped={capture.preprocess_skipped_count} "
+                            f"ms[wait={wait_seconds / timing_divisor * 1000:.1f} "
+                            f"read={read_seconds / timing_divisor * 1000:.1f} "
+                            f"undistort={preprocess_seconds / timing_divisor * 1000:.1f} "
                             f"vision={vision_seconds / timing_divisor * 1000:.1f} "
                             f"serial={serial_seconds / timing_divisor * 1000:.1f} "
                             f"ui={ui_seconds / timing_divisor * 1000:.1f}]",
                             flush=True,
                         )
+                        last_log_processed = processed
+                        last_log_captured = capture_count
                         last_log_at = now
                         timing_samples = 0
-                        capture_seconds = vision_seconds = serial_seconds = ui_seconds = 0.0
+                        wait_seconds = read_seconds = preprocess_seconds = 0.0
+                        vision_seconds = serial_seconds = ui_seconds = 0.0
                     last_valid = measurement.valid
                     if quit_requested:
                         break
@@ -219,7 +266,7 @@ def main() -> int:
     elapsed = time.monotonic() - started
     print(
         f"processed={processed} sent={sent} elapsed={elapsed:.2f}s "
-        f"rate={processed / max(elapsed, 1e-9):.1f}fps"
+        f"average_tx_fps={processed / max(elapsed, 1e-9):.1f}"
     )
     return 0
 

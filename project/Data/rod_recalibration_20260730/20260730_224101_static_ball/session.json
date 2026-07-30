@@ -1,0 +1,51 @@
+{
+  "created_at": "2026-07-30T22:41:01.050+08:00",
+  "label": "static_ball",
+  "position_cm": -10.0,
+  "requested_camera": {
+    "device": "/dev/video0",
+    "width": 640,
+    "height": 480,
+    "fps": 120.0,
+    "fourcc": "MJPG",
+    "buffer_size": 1,
+    "rotation": 0,
+    "undistort": true,
+    "calibration_file": null,
+    "undistort_alpha": 0.0,
+    "auto_exposure": null,
+    "exposure": null,
+    "gain": null,
+    "auto_white_balance": null,
+    "white_balance_temperature": null,
+    "autofocus": null,
+    "focus": null
+  },
+  "actual_camera": {
+    "device": "/dev/video0",
+    "width": 640,
+    "height": 480,
+    "fps": 120.10136452241716,
+    "fourcc": "MJPG",
+    "buffer_size": 1,
+    "rotation": 0,
+    "output_fps_target": 120.0,
+    "undistortion": {
+      "enabled": true,
+      "calibration_file": "/home/sunrise/rdk_linux_sheng_dian_sai/project/Driver/calibration/camera_calibration.npz",
+      "calibration_width": 640,
+      "calibration_height": 480,
+      "alpha": 0.0
+    },
+    "control_set_results": {
+      "fourcc": true,
+      "width": true,
+      "height": true,
+      "fps": true,
+      "buffer_size": true
+    }
+  },
+  "mode_warnings": [],
+  "images_have_preview_overlay": false,
+  "images_are_undistorted": true
+}

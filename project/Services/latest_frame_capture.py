@@ -8,16 +8,20 @@ from project.Core.models import FramePacket
 
 
 class LatestFrameCapture:
-    """Overlap camera capture/undistortion with vision without queuing stale frames."""
+    """Three-stage latest-frame pipeline with no stale-frame FIFO."""
 
     def __init__(self, camera):
         self.camera = camera
         self._condition = threading.Condition()
-        self._thread: Optional[threading.Thread] = None
+        self._capture_thread: Optional[threading.Thread] = None
+        self._preprocess_thread: Optional[threading.Thread] = None
         self._running = False
+        self._latest_raw: Optional[FramePacket] = None
         self._latest: Optional[FramePacket] = None
         self._error: Optional[BaseException] = None
         self._captured_count = 0
+        self._preprocessed_count = 0
+        self._preprocess_skipped_count = 0
         self._first_captured_at: Optional[float] = None
         self._last_captured_at: Optional[float] = None
 
@@ -27,12 +31,18 @@ class LatestFrameCapture:
                 return self
             self._running = True
             self._error = None
-        self._thread = threading.Thread(
+        self._capture_thread = threading.Thread(
             target=self._capture_loop,
-            name="latest-camera-frame",
+            name="camera-raw-capture",
             daemon=True,
         )
-        self._thread.start()
+        self._preprocess_thread = threading.Thread(
+            target=self._preprocess_loop,
+            name="camera-frame-preprocess",
+            daemon=True,
+        )
+        self._capture_thread.start()
+        self._preprocess_thread.start()
         return self
 
     def wait_for_frame(
@@ -42,7 +52,7 @@ class LatestFrameCapture:
         with self._condition:
             while True:
                 if self._error is not None:
-                    raise RuntimeError("camera capture thread failed") from self._error
+                    raise RuntimeError("camera pipeline thread failed") from self._error
                 if self._latest is not None and self._latest.sequence > after_sequence:
                     return self._latest
                 if not self._running:
@@ -56,6 +66,16 @@ class LatestFrameCapture:
     def captured_count(self) -> int:
         with self._condition:
             return self._captured_count
+
+    @property
+    def preprocessed_count(self) -> int:
+        with self._condition:
+            return self._preprocessed_count
+
+    @property
+    def preprocess_skipped_count(self) -> int:
+        with self._condition:
+            return self._preprocess_skipped_count
 
     @property
     def measured_fps(self) -> float:
@@ -75,9 +95,12 @@ class LatestFrameCapture:
         with self._condition:
             self._running = False
             self._condition.notify_all()
-        if self._thread is not None:
-            self._thread.join(timeout=1.0)
-            self._thread = None
+        if self._capture_thread is not None:
+            self._capture_thread.join(timeout=1.0)
+            self._capture_thread = None
+        if self._preprocess_thread is not None:
+            self._preprocess_thread.join(timeout=1.0)
+            self._preprocess_thread = None
 
     def _capture_loop(self) -> None:
         try:
@@ -85,13 +108,53 @@ class LatestFrameCapture:
                 with self._condition:
                     if not self._running:
                         return
-                packet = self.camera.capture_packet()
+                capture_raw = getattr(self.camera, "capture_raw_packet", None)
+                packet = (
+                    capture_raw()
+                    if capture_raw is not None
+                    else self.camera.capture_packet()
+                )
                 with self._condition:
-                    self._latest = packet
+                    self._latest_raw = packet
                     self._captured_count += 1
                     if self._first_captured_at is None:
                         self._first_captured_at = packet.captured_at
                     self._last_captured_at = packet.captured_at
+                    self._condition.notify_all()
+        except BaseException as error:
+            with self._condition:
+                self._error = error
+                self._running = False
+                self._condition.notify_all()
+
+    def _preprocess_loop(self) -> None:
+        last_raw_sequence = -1
+        try:
+            while True:
+                with self._condition:
+                    while True:
+                        if self._error is not None:
+                            return
+                        if not self._running:
+                            return
+                        if (
+                            self._latest_raw is not None
+                            and self._latest_raw.sequence > last_raw_sequence
+                        ):
+                            packet = self._latest_raw
+                            break
+                        self._condition.wait()
+                if last_raw_sequence >= 0:
+                    skipped = max(0, packet.sequence - last_raw_sequence - 1)
+                else:
+                    skipped = 0
+                last_raw_sequence = packet.sequence
+                preprocess = getattr(self.camera, "preprocess_packet", None)
+                output = preprocess(packet) if preprocess is not None else packet
+                with self._condition:
+                    self._latest = output
+                    self._preprocessed_count += 1
+                    self._preprocess_skipped_count += skipped
                     self._condition.notify_all()
         except BaseException as error:
             with self._condition:

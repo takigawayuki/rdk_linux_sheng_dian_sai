@@ -10,7 +10,7 @@ from project.Algorithm.rod_mapper import RodMapper
 from project.Core.models import BallDetection, BallMeasurement, BallTrack, FramePacket
 
 
-BALL_VISION_DIRECTION = -1.0
+BALL_VISION_DIRECTION = 1.0
 BALL_VISION_SCALE_CM_PER_CM = 1.0
 
 
