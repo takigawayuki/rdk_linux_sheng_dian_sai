@@ -77,6 +77,11 @@ class BallMeasurement:
     position_cm: Optional[float]
     confidence: float
     detected: bool
+    velocity_cm_s: float = 0.0
+    valid: bool = False
+    predicted: bool = False
+    target_position_cm: float = 0.0
+    error_cm: Optional[float] = None
 
 
 @dataclass(frozen=True)

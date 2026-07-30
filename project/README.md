@@ -14,7 +14,7 @@
 | 第二步 | 钢球检测 | 第一版已完成 | 钢球像素中心 `(u, v)` 和置信度 |
 | 第三步 | 摆杆标定和厘米映射 | 第一版已完成 | 相对 O 点的位置 `x_cm` |
 | 第四步 | 一维跟踪和丢球保护 | 第一版已完成 | 平滑位置、速度、检测有效状态 |
-| 第五步 | 串口/控制接口 | 未开始 | 向摆杆控制器发送实时钢球状态 |
+| 第五步 | 串口/控制接口 | 18 字节协议和实时发送入口已完成，等待真机联调 | 向摆杆控制器发送实时钢球状态 |
 | 第六步 | 图传、录像和完整程序编排 | 未开始 | 可参赛运行的完整视觉程序 |
 
 当前建议先按第 18～20 节复现离线标定和视频评估，再进入实时相机服务。第一版参数是根据 `Data/samples` 中 640×480、120 FPS、已去畸变的数据确定的。
@@ -29,7 +29,9 @@
 - 像素到厘米的一维线性映射已完成，五个标定点 RMSE 为 `0.0665 cm`，最大标定点残差为 `0.0890 cm`。
 - alpha-beta 一维跟踪已完成：最长只允许预测 `0.12 s`，超时输出 LOST，重新捕获要求连续两帧一致。
 - 滚动视频离线通路已跑通：`摄像头录像 -> 检测 -> 跟踪 -> 厘米映射 -> 标注视频/统计结果`。
-- 当前共有 19 个 Python 自动化测试，全部通过。
+- 当前共有 27 个 Python 自动化测试，全部通过。
+- 视觉到控制器的固定 18 字节串口协议、CRC16、实时发送入口和下位机 C 解包说明已完成。
+- PC 串口助手双向联调工具已完成，支持任意字节回显、连续 18 字节测试包和 `PING/PONG` 反向确认。
 
 尚未完成或尚未充分验收：
 
@@ -37,7 +39,7 @@
 - `20260730_074905_hand_occlusion` 中手主要在凹槽下方，钢球仍然可见，因此只验证了手部邻近干扰，没有充分验证长时间完全遮挡。
 - 检测置信度平均值偏低，当前数值还不能直接解释为识别正确概率。
 - 不输出标注视频时离线速度约 `97 FPS`，尚未满足完整算法链路 `120 FPS` 的实时预算。
-- 实时相机视觉服务、串口发送、控制器联调和正式运行入口尚未实现。
+- 实时相机视觉服务和串口发送入口已经实现，但尚未连接真实 USB-TTL/控制板验收；正式参赛入口仍未完成。
 
 ### 1.2 下一步按什么顺序做
 
@@ -46,8 +48,8 @@
 1. **完成完全遮挡验收**：用不透明纸片从镜头视角完全盖住钢球约 `0.5 s`，验证状态能按 `DETECTED -> PREDICTED -> LOST -> DETECTED` 转换，并确认遮挡期间不会误锁手或结构件。
 2. **补独立精度验证数据**：重新摆放若干没有参与拟合的位置，例如 `-8、-3、+3、+8 cm`，统计真实厘米误差，而不是继续使用原来的五个标定点自测。
 3. **调整置信度和检测性能**：根据完全遮挡视频校准置信度规则，优化 ROI/Hough 处理，使不写调试视频的视觉链路达到或接近 `120 FPS`。
-4. **建立实时视觉服务**：复用 `Camera、BallDetector、BallTracker、RodMapper`，连续输出带时间戳的 `position_cm、velocity、confidence、valid`。
-5. **最后接控制器通信**：先定义数据协议和 LOST 安全行为，再通过串口把实时测量发给步进电机控制器。
+4. **真机验证实时视觉服务**：当前代码已复用 `Camera、BallDetector、BallTracker、RodMapper` 并输出串口帧，下一步测量真实处理帧率和端到端延迟。
+5. **联调控制器通信**：协议已定义；先用固定测试帧验证 CRC、浮点数和正负方向，再允许步进电机低速闭环动作。
 
 完成第 1～3 项后，离线视觉算法才算通过第一轮验收；完成第 4 项后，才进入真正的车载实时运行阶段。
 
@@ -97,6 +99,7 @@ project/
 │   ├── __init__.py
 │   ├── camera.py
 │   ├── my_serial.py
+│   ├── vision_protocol.py              # 18 字节帧和 CRC16
 │   ├── configs/
 │   │   └── rod_calibration.json       # 像素到厘米的标定结果
 │   └── calibration/
@@ -114,13 +117,17 @@ project/
 │
 ├── Services/
 │   ├── __init__.py
-│   └── sample_storage.py
+│   ├── sample_storage.py
+│   └── vision_pipeline.py              # 单帧检测/跟踪/映射编排
 │
 ├── Tools/
 │   ├── __init__.py
 │   ├── collect_samples.py              # 真机采集
 │   ├── calibrate_rod.py                # 静态样本拟合映射
-│   └── evaluate_vision.py              # 视频离线评估
+│   ├── evaluate_vision.py              # 视频离线评估
+│   ├── send_vision_packet.py           # 固定串口帧联调工具
+│   ├── serial_duplex_test.py           # PC 串口助手双向测试
+│   └── run_vision_serial.py            # 实时相机到串口入口
 │
 ├── Workbench/                       # 3D视觉教学与仿真前端
 │   ├── src/
@@ -135,11 +142,15 @@ project/
 │   ├── test_ball_tracker.py
 │   ├── test_rod_mapper.py
 │   ├── test_sample_storage.py
-│   └── test_undistorter.py
+│   ├── test_undistorter.py
+│   ├── test_vision_pipeline.py
+│   └── test_vision_protocol.py
 │
 └── Data/
     ├── README.md
     └── samples/                        # 运行采集工具后自动创建
+
+视觉串口18字节帧格式说明.md               # 给下位机开发人员的协议文档
 ```
 
 `__init__.py` 用于让 Python 把目录识别为可以导入的包，一般不需要直接运行。
@@ -262,7 +273,9 @@ camera.close()
 
 #### `Driver/my_serial.py`
 
-这是从参考工程保留的串口封装，目前第一步没有调用。第五步接入控制器时会检查并改造通信协议。
+这是 USB-TTL 串口传输封装，负责打开/关闭串口并完整发送字节包。18 字节字段定义和 CRC16 位于 `Driver/vision_protocol.py`，避免把协议编码与硬件操作混在一起。
+
+实时入口 `Tools/run_vision_serial.py` 每处理完一帧就调用它发送钢球状态。完整帧格式、下位机 C 解包代码和固定测试向量见 `视觉串口18字节帧格式说明.md`。
 
 ### 4.3 `Algorithm`：视觉和滤波算法
 
@@ -813,20 +826,66 @@ processing with annotated-video writing: 18.1 FPS
 
 ## 21. 第五步：控制器通信
 
-状态：**未实现**。
+状态：**18 字节协议、CRC、串口封装和实时发送入口已实现，等待 USB-TTL 与控制板真机联调**。
 
-计划改造：
+已实现：
 
 ```text
 Driver/my_serial.py
-Services/ball_state_publisher.py
+Driver/vision_protocol.py
+Services/vision_pipeline.py
+Tools/run_vision_serial.py
+Tools/send_vision_packet.py
+Tools/serial_duplex_test.py
+Test/test_vision_protocol.py
+Test/test_vision_pipeline.py
+视觉串口18字节帧格式说明.md
 ```
 
-主要工作：
+数据包固定 18 字节，包含：
 
-1. 定义钢球位置、速度、置信度、序号和状态位协议。
-2. 加入 CRC 和接收超时判断。
-3. 独立线程发送最新状态，禁止积压旧状态。
+```text
+0xA5 + 状态 + 偏差 cm + 位置 cm + 速度 cm/s + 帧序号 + CRC16
+```
+
+中心 O 点实时运行命令：
+
+```bash
+python3 -m project.Tools.run_vision_serial \
+  --device /dev/video0 \
+  --serial-port /dev/ttyS1 \
+  --baudrate 115200 \
+  --target-cm 0 \
+  --log-interval 0.5
+```
+
+`--log-interval 0.5` 表示终端每 0.5 秒打印一次发送摘要，并在视觉状态进入或退出 LOST 时立即打印。示例：
+
+```text
+TX seq=00120 status=DETECTED position= +2.35cm error= -2.35cm velocity= -8.20cm/s confidence=0.87 sent=121 rate=24.1Hz
+```
+
+其中 `rate` 是实际视觉处理和串口发包频率，不是摄像头请求的 120 FPS。设置 `--log-interval 0` 可以关闭周期日志；不建议每帧打印，否则终端输出会进一步降低实时速度。
+
+此命令会真实打开电机控制器串口并持续发包。第一次联调必须先限制步进电机速度/角度或断开电机动力，只验证接收数据，确认误差正负方向后再闭环。
+
+待真机完成：
+
+1. 下位机用固定测试帧验证 CRC16 和小端 float 解包。
+2. 验证 `error_cm = target_position_cm - position_cm` 的正负方向与电机机构方向。
+3. 验证 DETECTED、PREDICTED、LOST 三种状态下的安全行为。
+4. 测量实际发包率、丢包率和端到端延迟。
+
+与 PC 串口助手联调时，先运行双向回显模式：
+
+```bash
+python3 -m project.Tools.serial_duplex_test \
+  --serial-port /dev/ttyS1 \
+  --baudrate 115200 \
+  --mode echo
+```
+
+PC 应收到 `RDK_READY`；PC 发送的任意字节应被原样回显。完整接线、HEX 连续包测试和注意事项见 `视觉串口18字节帧格式说明.md` 第 10 节。
 
 ## 22. 第六步：图传、录像和正式入口
 
@@ -835,7 +894,6 @@ Services/ball_state_publisher.py
 计划新增：
 
 ```text
-Services/vision_pipeline.py
 Services/video_recorder.py
 Services/web_streamer.py
 main.py
@@ -849,3 +907,177 @@ main.py
 4. 处理摄像头断开、丢球、网络断开和安全退出。
 
 后续每完成一步，再把对应章节从“未实现”改为“已实现”，并补充实际运行命令和验收结果。
+
+## 23. 新增串口代码速查
+
+### 23.1 文件分别负责什么
+
+| 文件 | 作用 |
+| --- | --- |
+| `Driver/vision_protocol.py` | 定义固定 18 字节帧、三种视觉状态、CRC16 组包和解包 |
+| `Driver/my_serial.py` | 打开/关闭串口，发送完整视觉帧，读取当前收到的串口字节 |
+| `Services/vision_pipeline.py` | 组合检测、跟踪和厘米映射，生成串口需要的位置、速度与偏差 |
+| `Tools/send_vision_packet.py` | 不开摄像头，打印或发送一包固定测试数据 |
+| `Tools/serial_duplex_test.py` | 与 PC 串口助手进行回显、连续视觉包和 `PING/PONG` 双向测试 |
+| `Tools/run_vision_serial.py` | 正式运行实时摄像头视觉，并在每帧处理完成后发送 18 字节数据 |
+| `Test/test_vision_protocol.py` | 验证 CRC、帧长度、字段解包、LOST 数据和串口接收 |
+| `Test/test_vision_pipeline.py` | 验证像素位置/速度映射和 `目标 - 实测` 偏差计算 |
+| `视觉串口18字节帧格式说明.md` | 提供给下位机人员的完整协议、C 解包代码和联调步骤 |
+
+### 23.2 发送的主要数据
+
+```text
+error_cm = target_position_cm - position_cm
+```
+
+18 字节依次包含：
+
+```text
+0xA5、状态、偏差 cm、位置 cm、速度 cm/s、帧序号、CRC16
+```
+
+状态包括：
+
+- `0x20 DETECTED`：当前帧真实检测到钢球。
+- `0x21 PREDICTED`：短时间遮挡，使用不超过约 0.12 s 的预测值。
+- `0x00 LOST`：没有可信位置，下位机不能继续使用位置环积分。
+
+### 23.3 三种常用测试命令
+
+只打印固定 18 字节包，不打开串口：
+
+```bash
+python3 -m project.Tools.send_vision_packet \
+  --status detected \
+  --error-cm -2 \
+  --position-cm 3 \
+  --velocity-cm-s -2 \
+  --sequence 9 \
+  --print-only
+```
+
+与 PC 串口助手进行双向回显：
+
+```bash
+python3 -m project.Tools.serial_duplex_test \
+  --serial-port /dev/ttyS1 \
+  --baudrate 115200 \
+  --mode echo
+```
+
+实时视觉处理并向电机控制器发送：
+
+```bash
+python3 -m project.Tools.run_vision_serial \
+  --device /dev/video0 \
+  --serial-port /dev/ttyS1 \
+  --baudrate 115200 \
+  --target-cm 0
+```
+
+第一次联调不要直接使能步进电机闭环。先用 PC 串口助手或断开电机动力验证帧内容、CRC 和正负方向；同一个串口也不能被两个程序同时打开。
+
+本项目目标板的 UART1 按 `/dev/ttyS1` 使用，注意设备名不是 `tty/s1`。如果以后改用插在 RDK USB 口上的 USB-TTL，设备名才通常是 `/dev/ttyUSB0`，应以目标板执行 `ls -l /dev/ttyS* /dev/ttyUSB*` 的结果为准。
+
+### 23.4 PC 串口助手回显测试怎么使用
+
+回显测试的数据流是：
+
+```text
+PC 发送 -> RDK UART1 接收 -> RDK 原样返回 -> PC 接收
+```
+
+它只用于验证串口接线、波特率和双向收发，不会运行视觉算法，也不应该在测试时使能电机。
+
+#### 23.4.1 接线
+
+```text
+PC USB-TTL TX  -> RDK UART1 RX
+PC USB-TTL RX  <- RDK UART1 TX
+PC USB-TTL GND -- RDK GND
+```
+
+确认 USB-TTL 使用 `3.3V TTL` 电平。TX 和 RX 必须交叉，双方必须共地，不要连接 VCC。
+
+#### 23.4.2 PC 串口助手设置
+
+在 PC 设备管理器中找到 USB-TTL 对应的 COM 口，然后设置：
+
+```text
+波特率：115200
+数据位：8
+停止位：1
+校验位：None
+流控：None
+接收显示：第一次先使用 ASCII
+```
+
+先在 PC 串口助手中打开 COM 口，再启动 RDK 程序，因为 `RDK_READY` 只在程序启动时发送一次。
+
+#### 23.4.3 启动双向回显
+
+在 RDK 执行：
+
+```bash
+cd /home/sunrise/rdk_linux_sheng_dian_sai
+
+python3 -m project.Tools.serial_duplex_test \
+  --serial-port /dev/ttyS1 \
+  --baudrate 115200 \
+  --mode echo
+```
+
+RDK 应显示：
+
+```text
+串口 /dev/ttyS1 打开成功
+mode=echo port=/dev/ttyS1 baudrate=115200
+TX ASCII: RDK_READY
+```
+
+PC 应收到：
+
+```text
+RDK_READY
+```
+
+PC 使用 ASCII 发送 `hello`，应原样收到 `hello`。RDK 会显示：
+
+```text
+RX HEX: 68 65 6C 6C 6F
+RX TXT: hello
+TX ECHO: 68 65 6C 6C 6F
+```
+
+然后将 PC 串口助手切换为 HEX 发送，发送：
+
+```text
+01 A5 7F
+```
+
+PC 应原样收到 `01 A5 7F`。这两项都通过，才能说明 PC->RDK 和 RDK->PC 两个方向均正常。
+
+#### 23.4.4 测试连续 18 字节视觉包
+
+先在 RDK 按 `Ctrl+C` 结束 echo 模式，再运行：
+
+```bash
+python3 -m project.Tools.serial_duplex_test \
+  --serial-port /dev/ttyS1 \
+  --baudrate 115200 \
+  --mode packet \
+  --interval 0.5
+```
+
+PC 切换为 HEX 接收，应每隔 `0.5 s` 收到一个以 `A5 20` 开头的固定 18 字节包。帧序号每包递增，因此最后两个 CRC 字节也会变化。
+
+PC 使用 ASCII 发送 `PING`，RDK 应回复 `PONG`，用于确认发送视觉二进制包时反向链路仍然正常。测试完成后在 RDK 按 `Ctrl+C`。
+
+#### 23.4.5 常见问题
+
+- `/dev/ttyS1` 不存在：执行 `ls -l /dev/ttyS*`，检查 UART1 是否在设备树中启用。
+- 打开串口提示权限不足：检查当前用户是否属于串口设备对应的用户组。
+- PC 收不到 `RDK_READY`：先打开 PC COM 口，再重新启动 RDK 回显程序。
+- 收到乱码：确认两端都是 `115200、8N1、无校验、无流控`。
+- 只能单向通信：重点检查 TX/RX 是否交叉以及 GND 是否相连。
+- 串口被占用：同一时间只能运行 `serial_duplex_test`、`send_vision_packet`、`run_vision_serial` 中的一个程序，并检查 UART1 是否被系统调试终端占用。

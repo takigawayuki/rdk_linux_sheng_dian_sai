@@ -1,107 +1,158 @@
+"""Serial transport for the fixed vision-to-motor packet."""
+
+import threading
+from typing import Optional
+
 import serial
-import time
-import struct
+
+from project.Driver.vision_protocol import (
+    VisionSerialFrame,
+    VisionStatus,
+    build_packet,
+)
+
 
 class MySerial:
-    def __init__(self, port, baudrate=115200, timeout=1):
-        """
-        初始化串口
-        :param port: 串口端口，如 'COM1' 或 '/dev/ttyAMA0'
-        :param baudrate: 波特率，默认115200
-        :param timeout: 超时时间，默认1秒
-        """
+    def __init__(
+        self,
+        port,
+        baudrate=115200,
+        timeout=0.0,
+        write_timeout=0.05,
+        serial_factory=serial.Serial,
+    ):
         self.port = port
-        self.baudrate = baudrate
+        self.baudrate = int(baudrate)
         self.timeout = timeout
+        self.write_timeout = write_timeout
+        self._serial_factory = serial_factory
         self.ser = None
         self.is_open = False
-    
+        self._sequence = 0
+        self._write_lock = threading.Lock()
+
     def open(self):
-        """
-        打开串口
-        :return: 成功返回True，失败返回False
-        """
         try:
-            self.ser = serial.Serial(
+            self.ser = self._serial_factory(
                 port=self.port,
                 baudrate=self.baudrate,
-                timeout=self.timeout
+                timeout=self.timeout,
+                write_timeout=self.write_timeout,
             )
-            self.is_open = True
+            self.is_open = bool(getattr(self.ser, "is_open", True))
+            if not self.is_open:
+                raise OSError(f"serial port did not open: {self.port}")
             print(f"串口 {self.port} 打开成功")
             return True
-        except Exception as e:
-            print(f"串口打开失败: {str(e)}")
+        except (OSError, serial.SerialException, ValueError) as error:
+            print(f"串口打开失败: {error}")
+            self.ser = None
             self.is_open = False
             return False
-    
+
     def send_data(self, data):
-        """
-        发送数据
-        :param data: 要发送的数据
-        :return: 成功返回True，失败返回False
-        """
+        if isinstance(data, str):
+            data = data.encode("utf-8")
+        if not isinstance(data, (bytes, bytearray, memoryview)):
+            raise TypeError("serial data must be bytes-like or str")
         if not self.is_open or self.ser is None:
-            print("串口未打开")
             return False
-        
+        raw = bytes(data)
         try:
-            self.ser.write(data.encode('utf-8'))
-            return True
-        except Exception as e:
-            print(f"发送数据失败: {str(e)}")
+            with self._write_lock:
+                written = self.ser.write(raw)
+            return written is None or written == len(raw)
+        except (OSError, serial.SerialException):
             return False
-    
-    def send_deta(self, deta_x, deta_y):
-        """
-        发送偏差值（二进制协议）
-        :param deta_x: x方向偏差值（像素）
-        :param deta_y: y方向偏差值（像素）
-        :return: 成功返回True，失败返回False
 
-        协议格式（11字节）：
-        [0xAA][0x55][dx(float,4字节)][dy(float,4字节)][校验和(1字节)]
-        """
+    def send_vision_frame(self, frame: VisionSerialFrame) -> bool:
+        return self.send_data(build_packet(frame))
+
+    def read(self, size=1) -> bytes:
         if not self.is_open or self.ser is None:
-            print("串口未打开")
-            return False
-
+            return b""
         try:
-            # 构建数据包
-            header1 = 0xAA
-            header2 = 0x55
+            return bytes(self.ser.read(size))
+        except (OSError, serial.SerialException):
+            return b""
 
-            # 将 float 转换为小端序字节
-            dx_bytes = struct.pack('<f', deta_x)
-            dy_bytes = struct.pack('<f', deta_y)
+    def receive_available(self, max_bytes=4096) -> bytes:
+        """Read currently buffered bytes without waiting for a complete protocol frame."""
+        if max_bytes <= 0:
+            raise ValueError("max_bytes must be positive")
+        if not self.is_open or self.ser is None:
+            return b""
+        try:
+            available = int(getattr(self.ser, "in_waiting", 0))
+            if available <= 0:
+                return b""
+            return bytes(self.ser.read(min(available, max_bytes)))
+        except (OSError, serial.SerialException):
+            return b""
 
-            # 计算校验和（字节2-9的累加和，取低8位）
-            checksum = sum(dx_bytes + dy_bytes) & 0xFF
+    def send_vision_state(
+        self,
+        position_cm: Optional[float],
+        target_position_cm: float = 0.0,
+        velocity_cm_s: float = 0.0,
+        valid: bool = True,
+        predicted: bool = False,
+        sequence: Optional[int] = None,
+    ) -> bool:
+        """Send one measurement; error_cm is target minus measured position."""
+        if sequence is None:
+            sequence = self._sequence
+            self._sequence = (self._sequence + 1) & 0xFFFF
+        else:
+            sequence = int(sequence) & 0xFFFF
 
-            # 组装完整数据包
-            packet = bytes([header1, header2]) + dx_bytes + dy_bytes + bytes([checksum])
+        if not valid or position_cm is None:
+            frame = VisionSerialFrame(
+                status=VisionStatus.LOST,
+                error_cm=0.0,
+                position_cm=0.0,
+                velocity_cm_s=0.0,
+                sequence=sequence,
+            )
+        else:
+            position_cm = float(position_cm)
+            frame = VisionSerialFrame(
+                status=VisionStatus.PREDICTED if predicted else VisionStatus.DETECTED,
+                error_cm=float(target_position_cm) - position_cm,
+                position_cm=position_cm,
+                velocity_cm_s=float(velocity_cm_s),
+                sequence=sequence,
+            )
+        return self.send_vision_frame(frame)
 
-            # 发送数据
-            self.ser.write(packet)
-            return True
-        except Exception as e:
-            print(f"发送数据失败: {str(e)}")
-            return False
-    
+    def send_deta(self, deta_x, deta_y=0.0):
+        """Compatibility wrapper: send deta_x as error_cm in a detected frame."""
+        frame = VisionSerialFrame(
+            status=VisionStatus.DETECTED,
+            error_cm=float(deta_x),
+            position_cm=float(deta_y),
+            velocity_cm_s=0.0,
+            sequence=self._sequence,
+        )
+        self._sequence = (self._sequence + 1) & 0xFFFF
+        return self.send_vision_frame(frame)
+
     def close(self):
-        """
-        关闭串口
-        """
-        if self.is_open and self.ser is not None:
+        if self.ser is not None:
             try:
                 self.ser.close()
-                self.is_open = False
-                print(f"串口 {self.port} 关闭成功")
-            except Exception as e:
-                print(f"串口关闭失败: {str(e)}")
-    
+            except (OSError, serial.SerialException):
+                pass
+        self.ser = None
+        self.is_open = False
+
+    def __enter__(self):
+        if not self.open():
+            raise OSError(f"failed to open serial port: {self.port}")
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.close()
+
     def __del__(self):
-        """
-        析构函数，自动关闭串口
-        """
         self.close()
