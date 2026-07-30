@@ -17,7 +17,7 @@
 | 第五步 | 串口/控制接口 | 18 字节协议和实时发送入口已完成，等待真机联调 | 向摆杆控制器发送实时钢球状态 |
 | 第六步 | 图传、录像和完整程序编排 | 未开始 | 可参赛运行的完整视觉程序 |
 
-当前建议先按第 18～20 节复现离线标定和视频评估，再进入实时相机服务。第一版参数是根据 `Data/samples` 中 640×480、120 FPS、已去畸变的数据确定的。
+当前建议先用第 16 节的实时入口测清相机采集 FPS、视觉 FPS 和串口发送频率，再进行控制板低速联调。第一版参数是根据 `Data/samples` 中 640×480、120 FPS、已去畸变的数据确定的。
 
 ### 1.1 截至 2026-07-30 的进度快照
 
@@ -29,7 +29,7 @@
 - 像素到厘米的一维线性映射已完成，五个标定点 RMSE 为 `0.0665 cm`，最大标定点残差为 `0.0890 cm`。
 - alpha-beta 一维跟踪已完成：最长只允许预测 `0.12 s`，超时输出 LOST，重新捕获要求连续两帧一致。
 - 滚动视频离线通路已跑通：`摄像头录像 -> 检测 -> 跟踪 -> 厘米映射 -> 标注视频/统计结果`。
-- 当前共有 27 个 Python 自动化测试，全部通过。
+- 当前共有 30 个 Python 自动化测试，全部通过。
 - 视觉到控制器的固定 18 字节串口协议、CRC16、实时发送入口和下位机 C 解包说明已完成。
 - PC 串口助手双向联调工具已完成，支持任意字节回显、连续 18 字节测试包和 `PING/PONG` 反向确认。
 
@@ -38,20 +38,21 @@
 - 当前映射误差是标定点残差，还没有使用独立位置测试集验证最终厘米精度。
 - `20260730_074905_hand_occlusion` 中手主要在凹槽下方，钢球仍然可见，因此只验证了手部邻近干扰，没有充分验证长时间完全遮挡。
 - 检测置信度平均值偏低，当前数值还不能直接解释为识别正确概率。
-- 不输出标注视频时离线速度约 `97 FPS`，尚未满足完整算法链路 `120 FPS` 的实时预算。
-- 实时相机视觉服务和串口发送入口已经实现，但尚未连接真实 USB-TTL/控制板验收；正式参赛入口仍未完成。
+- 预测窗口优化后，现有滚动视频的离线算法速度约 `123.8 FPS`，已越过 120 FPS。最新无界面真机测试为 `camera=32.9 Hz、rate≈30.9 Hz`；视觉约 `2 ms`、串口约 `0.4 ms`，当前瓶颈是摄像头实际送帧速度，不是视觉或串口。
+- 实时入口已经改为后台持续采集并只保留最新帧，避免视觉线程排队处理旧画面；仍需在 `/dev/video0 + /dev/ttyS1` 真机上重新测量。
+- Workbench 已完成“球位置外环 + 步进电机角度位置内环 + 滚球动力学”的二维动态动画，控制与物理积分为 120 Hz，画面渲染约 30 FPS。
 
 ### 1.2 下一步按什么顺序做
 
-当前不要直接开始串口控制。应按以下顺序推进：
+当前先验证实时通路，再允许电机动作。应按以下顺序推进：
 
 1. **完成完全遮挡验收**：用不透明纸片从镜头视角完全盖住钢球约 `0.5 s`，验证状态能按 `DETECTED -> PREDICTED -> LOST -> DETECTED` 转换，并确认遮挡期间不会误锁手或结构件。
 2. **补独立精度验证数据**：重新摆放若干没有参与拟合的位置，例如 `-8、-3、+3、+8 cm`，统计真实厘米误差，而不是继续使用原来的五个标定点自测。
-3. **调整置信度和检测性能**：根据完全遮挡视频校准置信度规则，优化 ROI/Hough 处理，使不写调试视频的视觉链路达到或接近 `120 FPS`。
-4. **真机验证实时视觉服务**：当前代码已复用 `Camera、BallDetector、BallTracker、RodMapper` 并输出串口帧，下一步测量真实处理帧率和端到端延迟。
+3. **真机测速**：用 `--headless --log-interval 0.5` 运行实时入口，分别查看相机实测采集频率、视觉/发包频率和各阶段耗时。
+4. **根据日志定位瓶颈**：若相机约 30 Hz，先处理摄像头模式；若相机约 120 Hz 而发送约 30 Hz，则查看 `vision/serial/ui` 毫秒数并优化对应阶段。
 5. **联调控制器通信**：协议已定义；先用固定测试帧验证 CRC、浮点数和正负方向，再允许步进电机低速闭环动作。
 
-完成第 1～3 项后，离线视觉算法才算通过第一轮验收；完成第 4 项后，才进入真正的车载实时运行阶段。
+完成真机测速且发送频率接近新鲜图像的采集频率后，才进入真正的车载实时闭环阶段。
 
 ## 2. 最终系统会怎样工作
 
@@ -768,10 +769,12 @@ raw_detected: 1035/1132 = 91.4%
 valid after tracking: 1067/1132 = 94.3%
 longest prediction: 116.7 ms
 lost runs >= 3 frames: 0-11, 1079-1131
-processing: about 97 FPS on the current machine
+processing: about 123.8 FPS on the current machine
 ```
 
-尾部第 1079 帧以后钢球已经离开画面，手仍在附近，程序保持 LOST 而没有误锁到手；开头 12 帧也没有稳定钢球候选。离线处理约 97 FPS 不等于相机只能拍 97 FPS：视频文件解码和 Hough 检测目前尚未达到 120 FPS 实时预算，后续实时化还要优化。
+尾部第 1079 帧以后钢球已经离开画面，手仍在附近，程序保持 LOST 而没有误锁到手；开头 12 帧也没有稳定钢球候选。检测器建立跟踪后只在预测位置附近执行 Hough，并只转换搜索 ROI 的灰度图；优化前后检测统计保持一致，离线速度由约 97 FPS 提升到约 123.8 FPS。
+
+离线 123.8 FPS 不代表真机完整通路已经达到 120 Hz。最新 `run_vision_serial --headless` 实测为 `camera=32.9 Hz、rate≈30.9 Hz`，并且 `wait≈28 ms、vision≈2 ms、serial≈0.4 ms`。这说明程序大部分时间都在等待摄像头的新帧，当前应先检查摄像头支持模式、MJPG、曝光和 USB 链路。
 
 ### 20.2 生成短标注预览
 
@@ -856,16 +859,31 @@ python3 -m project.Tools.run_vision_serial \
   --serial-port /dev/ttyS1 \
   --baudrate 115200 \
   --target-cm 0 \
+  --headless \
   --log-interval 0.5
 ```
+
+第一次测 120 Hz 必须先使用 `--headless`，排除绘图和桌面显示的影响。确认通路速度后再去掉它，并用 `--preview-fps 30` 观察画面。
 
 `--log-interval 0.5` 表示终端每 0.5 秒打印一次发送摘要，并在视觉状态进入或退出 LOST 时立即打印。示例：
 
 ```text
-TX seq=00120 status=DETECTED position= +2.35cm error= -2.35cm velocity= -8.20cm/s confidence=0.87 sent=121 rate=24.1Hz
+camera device=/dev/video0 mode=640x480 fourcc=MJPG fps=120.00 undistorted=True
+TX seq=00120 status=DETECTED position= +2.35cm error= -2.35cm velocity= -8.20cm/s confidence=0.87 sent=121 rate=112.4Hz camera=119.8Hz skipped=7 ms[wait=0.7 vision=7.1 serial=0.2 ui=0.0]
 ```
 
-其中 `rate` 是实际视觉处理和串口发包频率，不是摄像头请求的 120 FPS。设置 `--log-interval 0` 可以关闭周期日志；不建议每帧打印，否则终端输出会进一步降低实时速度。
+第一行 `fps` 是摄像头驱动协商后报告的模式，不等于实际送帧速度。TX 行中 `camera` 才是后台采集线程按真实到帧时间测出的采集 FPS，`rate` 是处理新图像并成功发包的频率，`skipped` 是处理期间被较新图像覆盖的累计帧数。
+
+`ms[wait/vision/serial/ui]` 分别表示等待新帧、视觉算法、串口写入和界面的平均耗时。判断规则如下：
+
+- `fps≈30、camera≈30、rate≈30`：摄像头实际只输出 30 FPS，应先检查 MJPG、分辨率、USB 带宽和驱动支持模式。
+- `fps≈120、camera≈120、rate≈30、vision≈30 ms`：相机正常，视觉处理是瓶颈。
+- `camera≈120、rate≈120`：采集和串口通路达到目标；少量 `skipped` 表示始终使用最新帧，不会积累旧画面延迟。
+- `serial` 明显变大：检查串口驱动是否阻塞；115200 波特率发送 18 字节的线速约需 `1.56 ms`，理论最高约 `641 包/s`，本身足够承载 120 Hz。
+
+设置 `--log-interval 0` 可以关闭周期日志；不建议每帧打印，否则终端输出会降低实时速度。
+
+`--preview-fps 30` 只限制调试窗口刷新率，不限制视觉检测和串口发送；程序不再每处理一帧都复制并绘制预览图。追求最高实时速度时添加 `--headless` 完全关闭预览。
 
 此命令会真实打开电机控制器串口并持续发包。第一次联调必须先限制步进电机速度/角度或断开电机动力，只验证接收数据，确认误差正负方向后再闭环。
 
@@ -917,11 +935,13 @@ main.py
 | `Driver/vision_protocol.py` | 定义固定 18 字节帧、三种视觉状态、CRC16 组包和解包 |
 | `Driver/my_serial.py` | 打开/关闭串口，发送完整视觉帧，读取当前收到的串口字节 |
 | `Services/vision_pipeline.py` | 组合检测、跟踪和厘米映射，生成串口需要的位置、速度与偏差 |
+| `Services/latest_frame_capture.py` | 后台持续采集和去畸变，只保留最新帧并测量真实采集 FPS |
 | `Tools/send_vision_packet.py` | 不开摄像头，打印或发送一包固定测试数据 |
 | `Tools/serial_duplex_test.py` | 与 PC 串口助手进行回显、连续视觉包和 `PING/PONG` 双向测试 |
 | `Tools/run_vision_serial.py` | 正式运行实时摄像头视觉，并在每帧处理完成后发送 18 字节数据 |
 | `Test/test_vision_protocol.py` | 验证 CRC、帧长度、字段解包、LOST 数据和串口接收 |
 | `Test/test_vision_pipeline.py` | 验证像素位置/速度映射和 `目标 - 实测` 偏差计算 |
+| `Test/test_latest_frame_capture.py` | 验证最新帧覆盖、无旧帧排队和采集异常传递 |
 | `视觉串口18字节帧格式说明.md` | 提供给下位机人员的完整协议、C 解包代码和联调步骤 |
 
 ### 23.2 发送的主要数据
@@ -929,6 +949,16 @@ main.py
 ```text
 error_cm = target_position_cm - position_cm
 ```
+
+实时视觉入口统一采用以下控制坐标：
+
+```text
+小球向右运动：position_cm > 0，velocity_cm_s > 0
+目标在中心：target_position_cm = 0
+小球位于右侧：error_cm = 0 - position_cm < 0
+```
+
+标定文件原始方向与机构控制方向相反，因此程序默认使用 `BALL_VISION_DIRECTION = -1.0`。方向系数会同时作用于位置和速度，然后才计算误差，不能只反转 `position_cm`。
 
 18 字节依次包含：
 
@@ -942,7 +972,7 @@ error_cm = target_position_cm - position_cm
 - `0x21 PREDICTED`：短时间遮挡，使用不超过约 0.12 s 的预测值。
 - `0x00 LOST`：没有可信位置，下位机不能继续使用位置环积分。
 
-### 23.3 三种常用测试命令
+### 23.3 常用测试和正式发送命令
 
 只打印固定 18 字节包，不打开串口：
 
@@ -965,15 +995,60 @@ python3 -m project.Tools.serial_duplex_test \
   --mode echo
 ```
 
-实时视觉处理并向电机控制器发送：
+#### 23.3.1 无界面高速发送给电机控制器
+
+这是当前测速和正式控制联调优先使用的命令：
 
 ```bash
 python3 -m project.Tools.run_vision_serial \
   --device /dev/video0 \
   --serial-port /dev/ttyS1 \
   --baudrate 115200 \
-  --target-cm 0
+  --target-cm 0 \
+  --position-direction -1 \
+  --headless \
+  --log-interval 0.5
 ```
+
+程序每处理完一张**新的摄像头图像**就发送一个 18 字节包，不会重复旧数据伪造 120 Hz。`--target-cm 0` 表示目标为中心 O 点；若题目要求稳定在右侧 `+5 cm`，改成 `--target-cm 5`。
+
+`--position-direction -1` 是当前实测方向；它也是代码默认值，可以省略。启动后终端会打印：
+
+```text
+coordinates right-positive direction=-1 scale=1 error=target-position
+```
+
+把球手动向右移动时，确认 TX 日志中的 `position` 变为正数；向左移动时应变为负数。如果结果相反，临时改用 `--position-direction 1`，不要同时修改下位机误差符号或 `Kp` 符号。
+
+终端重点看：
+
+```text
+camera=32.9Hz rate=30.9Hz skipped=0 ms[wait=28.0 vision=2.1 serial=0.3 ui=0.0]
+```
+
+- `camera`：后台采集线程实际取得新图像的频率。
+- `rate`：视觉处理完成并成功向电机控制器发包的累计平均频率，启动后会缓慢趋于稳定。
+- `skipped`：视觉处理期间被更新图像覆盖的帧数；为 0 表示视觉没有跟不上相机。
+- `wait/vision/serial/ui`：等待相机、视觉、串口写入、界面显示的平均毫秒数。
+
+最新实测 `camera=32.9 Hz、rate≈30.9 Hz`，而 `vision≈2 ms、serial≈0.4 ms`，所以当前约 30 Hz 是摄像头送帧限制，不是串口限制。
+
+#### 23.3.2 带画面预览并发送给电机控制器
+
+需要观察检测圆是否套住钢球时使用：
+
+```bash
+python3 -m project.Tools.run_vision_serial \
+  --device /dev/video0 \
+  --serial-port /dev/ttyS1 \
+  --baudrate 115200 \
+  --target-cm 0 \
+  --position-direction -1 \
+  --preview-fps 30 \
+  --log-interval 0.5
+```
+
+`--preview-fps 30` 只限制窗口绘制速度，视觉和串口仍按新图像尽可能快地运行。按 `q` 或 `Ctrl+C` 退出。追求最高速度时必须改用上一条 `--headless` 命令。
 
 第一次联调不要直接使能步进电机闭环。先用 PC 串口助手或断开电机动力验证帧内容、CRC 和正负方向；同一个串口也不能被两个程序同时打开。
 

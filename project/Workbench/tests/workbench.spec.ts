@@ -21,8 +21,8 @@ async function canvasHasRenderedPixels(page: import("@playwright/test").Page) {
   });
 }
 
-async function canvas2DHasRenderedPixels(page: import("@playwright/test").Page) {
-  return page.locator("#physics-diagram").evaluate((canvas: HTMLCanvasElement) => {
+async function canvas2DHasRenderedPixels(page: import("@playwright/test").Page, selector = "#physics-diagram") {
+  return page.locator(selector).evaluate((canvas: HTMLCanvasElement) => {
     const ctx = canvas.getContext("2d");
     if (!ctx || canvas.width < 2 || canvas.height < 2) return false;
     const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
@@ -69,6 +69,9 @@ test("simulation runs and layout remains separated", async ({ page }, testInfo) 
   await page.locator("#sim-play").click();
   await expect(page.locator("#sim-play")).toContainText("暂停");
   await page.waitForTimeout(700);
+  await expect(page.locator("#control-loop-canvas")).toBeVisible();
+  expect(await canvas2DHasRenderedPixels(page, "#control-loop-canvas")).toBeTruthy();
+  await expect(page.locator("#loop-motor-error-out")).toContainText("eθ");
 
   const sceneBox = await page.locator(".scene-shell").boundingBox();
   const inspectorBox = await page.locator(".inspector").boundingBox();
@@ -81,7 +84,6 @@ test("simulation runs and layout remains separated", async ({ page }, testInfo) 
   }
 
   await expect(page.locator("#telemetry-true")).not.toHaveText("0.00 cm");
-  expect(await canvasHasRenderedPixels(page)).toBeTruthy();
   await page.locator("#sim-play").click();
   await expect(page.locator("#sim-play")).toContainText("运行");
   await page.screenshot({ path: testInfo.outputPath("simulation.png") });

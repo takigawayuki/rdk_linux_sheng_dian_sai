@@ -102,6 +102,25 @@ app.innerHTML = `
           <code id="physics-equation-balance">平衡条件：tanθFF = a车/g</code>
         </div>
       </section>
+
+      <section class="simulation-board" aria-label="小球与步进电机串级控制二维动画">
+        <div class="simulation-board-heading">
+          <span>120 Hz 固定步长 · 二维侧视模型</span>
+          <strong>球位置外环 + 步进电机角度位置内环</strong>
+        </div>
+        <canvas id="control-loop-canvas"></canvas>
+        <div class="simulation-loop-band">
+          <div><span>视觉反馈</span><strong id="loop-position-out">x = 0.00 cm</strong></div>
+          <b>→</b>
+          <div><span>位置误差 + 速度阻尼</span><strong id="loop-feedback-out">θPID = 0.00°</strong></div>
+          <b>→</b>
+          <div><span>摆杆目标角</span><strong id="loop-command-out">θ* = 0.00°</strong></div>
+          <b>→</b>
+          <div><span>步进电机位置环</span><strong id="loop-motor-error-out">eθ = 0.00°</strong></div>
+          <b>→</b>
+          <div><span>实际摆杆与滚球</span><strong id="loop-tilt-out">θ = 0.00°</strong></div>
+        </div>
+      </section>
     </section>
 
     <aside class="inspector">
@@ -184,9 +203,9 @@ app.innerHTML = `
           <input id="sim-feedforward" type="checkbox" checked />
         </label>
         <div class="gain-grid">
-          <label><span>Kp</span><input id="sim-kp" type="number" min="0" max="5" step="0.05" value="0.75" /></label>
-          <label><span>Ki</span><input id="sim-ki" type="number" min="0" max="1" step="0.01" value="0.08" /></label>
-          <label><span>Kd</span><input id="sim-kd" type="number" min="0" max="3" step="0.01" value="0.14" /></label>
+          <label><span>Kp</span><input id="sim-kp" type="number" min="0" max="5" step="0.05" value="0.28" /></label>
+          <label><span>Ki</span><input id="sim-ki" type="number" min="0" max="1" step="0.01" value="0" /></label>
+          <label><span>Kd</span><input id="sim-kd" type="number" min="0" max="3" step="0.01" value="0.22" /></label>
         </div>
         <div class="formula-box physics-formula">
           <code>ẍ = 5/7 [g sinθ − a<sub>车</sub> cosθ] − c ẋ</code>
@@ -195,7 +214,7 @@ app.innerHTML = `
         <div class="metric-grid physics-metrics">
           <div><span>反馈角 θPID</span><strong id="sim-feedback-out">0.00°</strong></div>
           <div><span>前馈角 θFF</span><strong id="sim-feedforward-out">5.82°</strong></div>
-          <div><span>舵机指令 θ*</span><strong id="sim-command-out">5.82°</strong></div>
+          <div><span>目标摆杆角 θ*</span><strong id="sim-command-out">5.82°</strong></div>
           <div><span>实际导轨角</span><strong id="sim-tilt-out">0.00°</strong></div>
           <div><span>钢球速度</span><strong id="sim-velocity-out">0.00 cm/s</strong></div>
           <div><span>钢球加速度</span><strong id="sim-acceleration-out">-71.43 cm/s²</strong></div>
@@ -263,6 +282,8 @@ const plot = $("#data-plot") as HTMLCanvasElement;
 const plotContext = plot.getContext("2d")!;
 const physicsDiagram = $("#physics-diagram") as HTMLCanvasElement;
 const physicsContext = physicsDiagram.getContext("2d")!;
+const controlLoopCanvas = $("#control-loop-canvas") as HTMLCanvasElement;
+const controlLoopContext = controlLoopCanvas.getContext("2d")!;
 
 let stage: Stage = "overview";
 let mappingMode: MappingMode = "linear";
@@ -272,6 +293,9 @@ let mappingModel: MappingModel;
 let lastFrameTime = performance.now();
 let lastPaintTime = 0;
 let historyTimer = 0;
+let simulationAccumulator = 0;
+const SIMULATION_STEP_SECONDS = 1 / 120;
+const MAX_SIMULATION_STEPS_PER_FRAME = 12;
 const positionHistory: Array<{ time: number; position: number; target: number }> = [];
 let physicsFrame: "ground" | "car" = "car";
 
@@ -772,6 +796,7 @@ $("#sim-disturb").addEventListener("click", () => simulation.disturb());
 $("#sim-reset").addEventListener("click", () => {
   simulation.running = false;
   simulation.reset(0);
+  simulationAccumulator = 0;
   positionHistory.length = 0;
   scene.setRodTilt(0);
   updateBallPosition(0);
@@ -814,30 +839,189 @@ function updateSimulationReadouts() {
   $("#sim-tilt-out").textContent = `${state.tiltDeg.toFixed(2)}°`;
   $("#sim-velocity-out").textContent = `${state.velocity.toFixed(2)} cm/s`;
   $("#sim-acceleration-out").textContent = `${state.acceleration.toFixed(2)} cm/s²`;
+  $("#loop-position-out").textContent = `x = ${signed(state.position, 2)} cm`;
+  $("#loop-feedback-out").textContent = `θPID = ${signed(state.feedbackDeg, 2)}°`;
+  $("#loop-command-out").textContent = `θ* = ${signed(state.tiltCommandDeg, 2)}°`;
+  $("#loop-motor-error-out").textContent = `eθ = ${signed(state.tiltCommandDeg - state.tiltDeg, 2)}°`;
+  $("#loop-tilt-out").textContent = `θ = ${signed(state.tiltDeg, 2)}°`;
+  drawControlLoop2D();
+}
+
+function drawControlLoop2D() {
+  const rect = controlLoopCanvas.getBoundingClientRect();
+  if (rect.width < 2 || rect.height < 2) return;
+  const dpr = Math.min(window.devicePixelRatio, 2);
+  const pixelWidth = Math.round(rect.width * dpr);
+  const pixelHeight = Math.round(rect.height * dpr);
+  if (controlLoopCanvas.width !== pixelWidth || controlLoopCanvas.height !== pixelHeight) {
+    controlLoopCanvas.width = pixelWidth;
+    controlLoopCanvas.height = pixelHeight;
+  }
+  const ctx = controlLoopContext;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const width = rect.width;
+  const height = rect.height;
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = "#edf0eb";
+  ctx.fillRect(0, 0, width, height);
+
+  const state = simulation.state;
+  const compact = width < 650;
+  const centerX = width * 0.5;
+  const centerY = height * (compact ? 0.5 : 0.52);
+  const beamLength = Math.min(width * 0.78, 820);
+  const theta = (state.tiltDeg * Math.PI) / 180;
+  const ex = Math.cos(theta);
+  const ey = Math.sin(theta);
+  const upX = Math.sin(theta);
+  const upY = -Math.cos(theta);
+  const halfBeam = beamLength / 2;
+
+  ctx.strokeStyle = "#aeb5ad";
+  ctx.lineWidth = 1;
+  ctx.setLineDash([5, 6]);
+  ctx.beginPath();
+  ctx.moveTo(centerX - halfBeam, centerY);
+  ctx.lineTo(centerX + halfBeam, centerY);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  const targetAlong = (simulation.config.target / 12) * halfBeam;
+  const targetX = centerX + ex * targetAlong;
+  const targetY = centerY + ey * targetAlong;
+  ctx.strokeStyle = "#d3941f";
+  ctx.lineWidth = 2;
+  ctx.setLineDash([6, 4]);
+  ctx.beginPath();
+  ctx.moveTo(targetX + upX * 12, targetY + upY * 12);
+  ctx.lineTo(targetX + upX * 82, targetY + upY * 82);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = "#9b6810";
+  ctx.font = "600 12px system-ui";
+  ctx.fillText(`目标 ${signed(simulation.config.target, 1)} cm`, targetX - 42, targetY + upY * 94);
+
+  ctx.strokeStyle = "#283029";
+  ctx.lineWidth = compact ? 10 : 14;
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(centerX - ex * halfBeam, centerY - ey * halfBeam);
+  ctx.lineTo(centerX + ex * halfBeam, centerY + ey * halfBeam);
+  ctx.stroke();
+  ctx.strokeStyle = "#f7f8f4";
+  ctx.lineWidth = compact ? 3 : 4;
+  ctx.stroke();
+
+  ctx.fillStyle = "#4d5750";
+  ctx.beginPath();
+  ctx.moveTo(centerX, centerY + 3);
+  ctx.lineTo(centerX - 28, centerY + 55);
+  ctx.lineTo(centerX + 28, centerY + 55);
+  ctx.closePath();
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(centerX, centerY, 8, 0, Math.PI * 2);
+  ctx.fillStyle = "#d8ddd6";
+  ctx.fill();
+
+  const ballAlong = (state.position / 12) * halfBeam;
+  const ballRadius = compact ? 17 : 23;
+  const ballX = centerX + ex * ballAlong + upX * (ballRadius + 9);
+  const ballY = centerY + ey * ballAlong + upY * (ballRadius + 9);
+  const gradient = ctx.createRadialGradient(
+    ballX - ballRadius * 0.3,
+    ballY - ballRadius * 0.35,
+    2,
+    ballX,
+    ballY,
+    ballRadius,
+  );
+  gradient.addColorStop(0, "#ffffff");
+  gradient.addColorStop(0.3, "#b9c2bd");
+  gradient.addColorStop(1, "#2c3530");
+  ctx.fillStyle = gradient;
+  ctx.beginPath();
+  ctx.arc(ballX, ballY, ballRadius, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = "#19201b";
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  const velocityLength = Math.min(100, Math.abs(state.velocity) * 2.5);
+  if (velocityLength > 3) {
+    const direction = Math.sign(state.velocity);
+    drawArrow(
+      ctx,
+      ballX,
+      ballY + upY * (ballRadius + 12),
+      ex * direction * velocityLength,
+      ey * direction * velocityLength,
+      "#2878b8",
+      `v ${signed(state.velocity, 1)} cm/s`,
+    );
+  }
+
+  ctx.fillStyle = "#283029";
+  ctx.font = compact ? "600 11px system-ui" : "600 13px system-ui";
+  ctx.fillText(`钢球 x = ${signed(state.position, 2)} cm`, 22, 32);
+  ctx.fillText(`位置误差 e = ${signed(simulation.config.target - state.position, 2)} cm`, 22, 53);
+  ctx.fillText(`摆杆目标 θ* = ${signed(state.tiltCommandDeg, 2)}°`, 22, 74);
+  ctx.fillText(`实际角 θ = ${signed(state.tiltDeg, 2)}°`, 22, 95);
+
+  ctx.textAlign = "right";
+  ctx.fillStyle = "#176d49";
+  ctx.fillText("外环：球位置误差 + 球速度阻尼", width - 22, 32);
+  ctx.fillText("内环：步进电机角度位置 PD", width - 22, 53);
+  ctx.fillStyle = "#687168";
+  ctx.fillText(`电机角速度 ${signed(state.tiltVelocityDegS, 1)}°/s`, width - 22, 74);
+  ctx.fillText("控制与物理积分 120 Hz", width - 22, 95);
+  ctx.textAlign = "left";
 }
 
 function animate(now: number) {
   requestAnimationFrame(animate);
-  // The virtual sensor is 120 FPS, while the teaching UI is intentionally
-  // rendered at 30 Hz to leave CPU/GPU headroom for the real vision pipeline.
-  if (now - lastPaintTime < 1000 / 30) return;
-  lastPaintTime = now;
-  const dt = Math.min(0.05, (now - lastFrameTime) / 1000);
+  const elapsed = Math.min(0.1, (now - lastFrameTime) / 1000);
   lastFrameTime = now;
   if (stage === "simulation") {
-    const state = simulation.update(dt);
+    if (simulation.running) {
+      simulationAccumulator += elapsed;
+      let steps = 0;
+      while (
+        simulationAccumulator >= SIMULATION_STEP_SECONDS &&
+        steps < MAX_SIMULATION_STEPS_PER_FRAME
+      ) {
+        simulation.update(SIMULATION_STEP_SECONDS);
+        simulationAccumulator -= SIMULATION_STEP_SECONDS;
+        historyTimer += SIMULATION_STEP_SECONDS;
+        if (historyTimer >= 0.05) {
+          historyTimer -= 0.05;
+          positionHistory.push({
+            time: now,
+            position: simulation.state.position,
+            target: simulation.config.target,
+          });
+          if (positionHistory.length > 300) positionHistory.shift();
+        }
+        steps += 1;
+      }
+      if (steps === MAX_SIMULATION_STEPS_PER_FRAME) simulationAccumulator = 0;
+    } else {
+      simulationAccumulator = 0;
+      simulation.refreshDiagnostics();
+    }
+  }
+
+  // Control/physics runs at 120 Hz; 3D and charts only repaint at about 30 Hz.
+  if (now - lastPaintTime < 1000 / 30) return;
+  lastPaintTime = now;
+  if (stage === "simulation") {
+    const state = simulation.state;
     scene.setBallPosition(state.position);
     scene.setRodTilt(state.tiltDeg);
     scene.setVehicleAcceleration(simulation.config.carAcceleration);
     updateSimulationReadouts();
     ($("#ball-x") as HTMLInputElement).value = state.position.toFixed(1);
     $("#ball-x-output").textContent = `${state.position.toFixed(2)} cm`;
-    historyTimer += dt;
-    if (historyTimer >= 0.05) {
-      historyTimer = 0;
-      positionHistory.push({ time: now, position: state.position, target: simulation.config.target });
-      if (positionHistory.length > 300) positionHistory.shift();
-    }
     $("#plot-value").textContent = `x ${state.position.toFixed(2)} cm`;
   }
   if (stage === "physics") {

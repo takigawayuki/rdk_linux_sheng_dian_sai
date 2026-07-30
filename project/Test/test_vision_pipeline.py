@@ -29,7 +29,7 @@ class FakeTracker:
 
 
 class VisionPipelineTests(unittest.TestCase):
-    def make_pipeline(self, directory, track):
+    def make_pipeline(self, directory, track, **kwargs):
         calibration = Path(directory) / "rod.json"
         RodMapper(0.04, -12.4).save(calibration)
         detection = BallDetection(True, 310.0, 248.0, 12.0, 0.9, 1)
@@ -37,6 +37,7 @@ class VisionPipelineTests(unittest.TestCase):
             calibration,
             detector=FakeDetector(detection),
             tracker=FakeTracker(track),
+            **kwargs,
         )
 
     def test_maps_position_velocity_and_target_error(self):
@@ -55,11 +56,32 @@ class VisionPipelineTests(unittest.TestCase):
                 target_position_cm=2.0,
             )
         measurement = result.measurement
-        self.assertAlmostEqual(measurement.position_cm, 1.0)
-        self.assertAlmostEqual(measurement.velocity_cm_s, 2.0)
-        self.assertAlmostEqual(measurement.error_cm, 1.0)
+        self.assertAlmostEqual(measurement.position_cm, -1.0)
+        self.assertAlmostEqual(measurement.velocity_cm_s, -2.0)
+        self.assertAlmostEqual(measurement.error_cm, 3.0)
         self.assertTrue(measurement.valid)
         self.assertEqual(measurement.sequence, 12)
+
+    def test_direction_and_scale_are_applied_before_error(self):
+        track = BallTrack(
+            valid=True,
+            pixel_x=335.0,
+            pixel_y=248.0,
+            velocity_x_px_s=50.0,
+            confidence=0.8,
+            detected=True,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            pipeline = self.make_pipeline(
+                directory, track, position_direction=1.0, position_scale=0.5
+            )
+            result = pipeline.process(
+                FramePacket(np.zeros((10, 10, 3), dtype=np.uint8), 1.5, 12),
+                target_position_cm=2.0,
+            )
+        self.assertAlmostEqual(result.measurement.position_cm, 0.5)
+        self.assertAlmostEqual(result.measurement.velocity_cm_s, 1.0)
+        self.assertAlmostEqual(result.measurement.error_cm, 1.5)
 
     def test_lost_track_has_no_position_or_error(self):
         with tempfile.TemporaryDirectory() as directory:

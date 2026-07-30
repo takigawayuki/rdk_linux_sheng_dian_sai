@@ -10,6 +10,10 @@ from project.Algorithm.rod_mapper import RodMapper
 from project.Core.models import BallDetection, BallMeasurement, BallTrack, FramePacket
 
 
+BALL_VISION_DIRECTION = -1.0
+BALL_VISION_SCALE_CM_PER_CM = 1.0
+
+
 @dataclass(frozen=True)
 class VisionPipelineResult:
     measurement: BallMeasurement
@@ -23,10 +27,18 @@ class VisionPipeline:
         calibration_file: Path,
         detector: Optional[BallDetector] = None,
         tracker: Optional[BallTracker] = None,
+        position_direction: float = BALL_VISION_DIRECTION,
+        position_scale: float = BALL_VISION_SCALE_CM_PER_CM,
     ):
+        if position_direction not in (-1.0, 1.0):
+            raise ValueError("position_direction must be -1 or +1")
+        if position_scale <= 0.0:
+            raise ValueError("position_scale must be positive")
         self.mapper = RodMapper.load(calibration_file)
         self.detector = detector or BallDetector()
         self.tracker = tracker or BallTracker()
+        self.position_direction = float(position_direction)
+        self.position_scale = float(position_scale)
 
     def process(
         self, packet: FramePacket, target_position_cm: float = 0.0
@@ -39,8 +51,15 @@ class VisionPipeline:
         velocity_cm_s = 0.0
         error_cm = None
         if track.valid and track.pixel_x is not None:
-            position_cm = self.mapper.map_pixel(track.pixel_x, clamp=True)
-            velocity_cm_s = track.velocity_x_px_s * self.mapper.slope_cm_per_px
+            coordinate_scale = self.position_scale * self.position_direction
+            position_cm = (
+                self.mapper.map_pixel(track.pixel_x, clamp=True) * coordinate_scale
+            )
+            velocity_cm_s = (
+                track.velocity_x_px_s
+                * self.mapper.slope_cm_per_px
+                * coordinate_scale
+            )
             error_cm = float(target_position_cm) - position_cm
         measurement = BallMeasurement(
             captured_at=packet.captured_at,

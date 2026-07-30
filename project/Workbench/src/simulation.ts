@@ -12,7 +12,10 @@ export type SimulationConfig = {
   gravity: number;
   inertiaRatio: number;
   tiltLimitDeg: number;
-  servoTimeConstant: number;
+  motorAngleKp: number;
+  motorAngleKd: number;
+  motorMaxVelocityDegS: number;
+  motorMaxAccelerationDegS2: number;
 };
 
 export type SimulationState = {
@@ -23,6 +26,7 @@ export type SimulationState = {
   tiltCommandDeg: number;
   feedbackDeg: number;
   feedforwardDeg: number;
+  tiltVelocityDegS: number;
 };
 
 /**
@@ -46,20 +50,24 @@ export class BallSimulation {
     tiltCommandDeg: 0,
     feedbackDeg: 0,
     feedforwardDeg: 0,
+    tiltVelocityDegS: 0,
   };
 
   config: SimulationConfig = {
     target: 0,
-    kp: 0.75,
-    ki: 0.08,
-    kd: 0.14,
+    kp: 0.28,
+    ki: 0,
+    kd: 0.22,
     carAcceleration: 1,
     feedforwardEnabled: true,
     damping: 0.55,
     gravity: 9.80665,
     inertiaRatio: 2 / 5,
     tiltLimitDeg: 12,
-    servoTimeConstant: 0.09,
+    motorAngleKp: 260,
+    motorAngleKd: 30,
+    motorMaxVelocityDegS: 180,
+    motorMaxAccelerationDegS2: 1000,
   };
 
   running = false;
@@ -75,6 +83,7 @@ export class BallSimulation {
       tiltCommandDeg: 0,
       feedbackDeg: 0,
       feedforwardDeg: this.feedforwardAngleDeg(),
+      tiltVelocityDegS: 0,
     };
     this.refreshDiagnostics();
   }
@@ -105,8 +114,22 @@ export class BallSimulation {
     this.integralError = Math.max(-40, Math.min(40, this.integralError + error * dt));
     this.refreshDiagnostics();
 
-    const servoBlend = 1 - Math.exp(-dt / Math.max(0.01, this.config.servoTimeConstant));
-    this.state.tiltDeg += (this.state.tiltCommandDeg - this.state.tiltDeg) * servoBlend;
+    const angleError = this.state.tiltCommandDeg - this.state.tiltDeg;
+    const angularAcceleration = Math.max(
+      -this.config.motorMaxAccelerationDegS2,
+      Math.min(
+        this.config.motorMaxAccelerationDegS2,
+        this.config.motorAngleKp * angleError - this.config.motorAngleKd * this.state.tiltVelocityDegS,
+      ),
+    );
+    this.state.tiltVelocityDegS = Math.max(
+      -this.config.motorMaxVelocityDegS,
+      Math.min(
+        this.config.motorMaxVelocityDegS,
+        this.state.tiltVelocityDegS + angularAcceleration * dt,
+      ),
+    );
+    this.state.tiltDeg += this.state.tiltVelocityDegS * dt;
     this.state.acceleration = this.ballAccelerationCmS2(this.state.tiltDeg);
     this.state.velocity += this.state.acceleration * dt;
     this.state.position += this.state.velocity * dt;

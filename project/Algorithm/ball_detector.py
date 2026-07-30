@@ -64,8 +64,20 @@ class BallDetector:
         radius_scale = (scale_x + scale_y) * 0.5
         top = max(0, int(round(self.config.roi_top * scale_y)))
         bottom = min(height, int(round(self.config.roi_bottom * scale_y)))
-        gray = frame if frame.ndim == 2 else cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        roi = gray[top:bottom]
+        left = 0
+        right = width
+        if predicted_x is not None:
+            search_margin = (
+                self.config.max_prediction_distance + self.config.max_radius
+            ) * scale_x
+            left = max(0, int(np.floor(predicted_x - search_margin)))
+            right = min(width, int(np.ceil(predicted_x + search_margin)) + 1)
+        source_roi = frame[top:bottom, left:right]
+        roi = (
+            source_roi
+            if source_roi.ndim == 2
+            else cv2.cvtColor(source_roi, cv2.COLOR_BGR2GRAY)
+        )
         if roi.size == 0:
             return BallDetection(detected=False)
 
@@ -84,18 +96,19 @@ class BallDetector:
             return BallDetection(detected=False)
 
         candidates = []
-        for x, local_y, radius in circles[0]:
+        for local_x, local_y, radius in circles[0]:
+            x = float(local_x + left)
             y = float(local_y + top)
             expected_y = (
                 self.config.rod_y_intercept
-                + self.config.rod_y_slope * (float(x) / scale_x)
+                + self.config.rod_y_slope * (x / scale_x)
             ) * scale_y
             path_error = abs(y - expected_y)
             if path_error > self.config.max_path_error * scale_y:
                 continue
             radius_error = abs(float(radius) - self.config.expected_radius * radius_scale)
             prediction_error = (
-                0.0 if predicted_x is None else abs(float(x) - predicted_x)
+                0.0 if predicted_x is None else abs(x - predicted_x)
             )
             if (
                 predicted_x is not None
@@ -103,7 +116,7 @@ class BallDetector:
             ):
                 continue
             score = path_error + radius_error * 0.35 + prediction_error * self.config.prediction_weight
-            candidates.append((score, float(x), y, float(radius), path_error, radius_error))
+            candidates.append((score, x, y, float(radius), path_error, radius_error))
 
         if not candidates:
             return BallDetection(detected=False, candidate_count=len(circles[0]))

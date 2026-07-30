@@ -16,7 +16,8 @@ if str(REPOSITORY_ROOT) not in sys.path:
 from project.Core.models import CameraConfig
 from project.Driver.camera import Camera
 from project.Driver.my_serial import MySerial
-from project.Services.vision_pipeline import VisionPipeline
+from project.Services.latest_frame_capture import LatestFrameCapture
+from project.Services.vision_pipeline import BALL_VISION_DIRECTION, VisionPipeline
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -27,7 +28,26 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--baudrate", type=int, default=115200)
     parser.add_argument("--device", default="/dev/video0")
     parser.add_argument("--target-cm", type=float, default=0.0)
+    parser.add_argument(
+        "--position-direction",
+        type=float,
+        choices=(-1.0, 1.0),
+        default=BALL_VISION_DIRECTION,
+        help="control-coordinate direction applied to mapped position and velocity",
+    )
+    parser.add_argument(
+        "--position-scale",
+        type=float,
+        default=1.0,
+        help="positive scale applied after pixel-to-centimetre calibration",
+    )
     parser.add_argument("--headless", action="store_true")
+    parser.add_argument(
+        "--preview-fps",
+        type=float,
+        default=30.0,
+        help="preview refresh rate; vision and serial continue at their maximum rate",
+    )
     parser.add_argument("--max-frames", type=int, default=0)
     parser.add_argument(
         "--log-interval",
@@ -73,68 +93,125 @@ def main() -> int:
         raise SystemExit("--max-frames cannot be negative")
     if args.log_interval < 0:
         raise SystemExit("--log-interval cannot be negative")
-    pipeline = VisionPipeline(args.calibration)
+    if args.preview_fps <= 0:
+        raise SystemExit("--preview-fps must be positive; use --headless to disable it")
+    if args.position_scale <= 0:
+        raise SystemExit("--position-scale must be positive")
+    pipeline = VisionPipeline(
+        args.calibration,
+        position_direction=args.position_direction,
+        position_scale=args.position_scale,
+    )
     camera_config = CameraConfig(device=args.device, width=640, height=480, fps=120.0)
     processed = sent = 0
     started = time.monotonic()
     last_log_at = started
+    last_preview_at = 0.0
     last_valid = None
+    timing_samples = 0
+    capture_seconds = vision_seconds = serial_seconds = ui_seconds = 0.0
+    skipped_frames = 0
+    last_sequence = -1
     try:
         with Camera(camera_config) as camera, MySerial(
             args.serial_port, args.baudrate
         ) as serial_link:
-            while True:
-                packet = camera.capture_packet()
-                result = pipeline.process(packet, args.target_cm)
-                measurement = result.measurement
-                ok = serial_link.send_vision_state(
-                    position_cm=measurement.position_cm,
-                    target_position_cm=measurement.target_position_cm,
-                    velocity_cm_s=measurement.velocity_cm_s,
-                    valid=measurement.valid,
-                    predicted=measurement.predicted,
-                    sequence=measurement.sequence,
-                )
-                processed += 1
-                sent += int(ok)
-                if not ok:
-                    raise OSError("serial write failed or wrote an incomplete packet")
-                now = time.monotonic()
-                validity_changed = last_valid is not None and measurement.valid != last_valid
-                periodic_log = (
-                    args.log_interval > 0 and now - last_log_at >= args.log_interval
-                )
-                if last_valid is None or validity_changed or periodic_log:
-                    status = (
-                        "DETECTED"
-                        if measurement.detected
-                        else "PREDICTED"
-                        if measurement.predicted
-                        else "LOST"
+            actual = camera.actual_settings()
+            print(
+                f"camera device={actual['device']} "
+                f"mode={actual['width']}x{actual['height']} "
+                f"fourcc={actual['fourcc']} fps={actual['fps']:.2f} "
+                f"undistorted={actual['undistortion'].get('enabled', False)}",
+                flush=True,
+            )
+            print(
+                f"coordinates right-positive direction={args.position_direction:+.0f} "
+                f"scale={args.position_scale:g} error=target-position",
+                flush=True,
+            )
+            for warning in camera.mode_warnings():
+                print(f"camera warning: {warning}", flush=True)
+            capture = LatestFrameCapture(camera).start()
+            try:
+                while True:
+                    loop_started = time.monotonic()
+                    packet = capture.wait_for_frame(last_sequence, timeout=1.0)
+                    capture_finished = time.monotonic()
+                    if last_sequence >= 0:
+                        skipped_frames += max(0, packet.sequence - last_sequence - 1)
+                    last_sequence = packet.sequence
+                    result = pipeline.process(packet, args.target_cm)
+                    vision_finished = time.monotonic()
+                    measurement = result.measurement
+                    ok = serial_link.send_vision_state(
+                        position_cm=measurement.position_cm,
+                        target_position_cm=measurement.target_position_cm,
+                        velocity_cm_s=measurement.velocity_cm_s,
+                        valid=measurement.valid,
+                        predicted=measurement.predicted,
+                        sequence=measurement.sequence,
                     )
-                    position = (
-                        "--" if measurement.position_cm is None else f"{measurement.position_cm:+.2f}cm"
+                    serial_finished = time.monotonic()
+                    processed += 1
+                    sent += int(ok)
+                    if not ok:
+                        raise OSError("serial write failed or wrote an incomplete packet")
+                    quit_requested = False
+                    if not args.headless:
+                        preview_now = time.monotonic()
+                        if preview_now - last_preview_at >= 1.0 / args.preview_fps:
+                            cv2.imshow("H Ball Vision Serial", annotate(packet.frame, result))
+                            last_preview_at = preview_now
+                        quit_requested = cv2.waitKey(1) & 0xFF == ord("q")
+                    now = time.monotonic()
+                    timing_samples += 1
+                    capture_seconds += capture_finished - loop_started
+                    vision_seconds += vision_finished - capture_finished
+                    serial_seconds += serial_finished - vision_finished
+                    ui_seconds += now - serial_finished
+                    validity_changed = last_valid is not None and measurement.valid != last_valid
+                    periodic_log = (
+                        args.log_interval > 0 and now - last_log_at >= args.log_interval
                     )
-                    error = (
-                        "--" if measurement.error_cm is None else f"{measurement.error_cm:+.2f}cm"
-                    )
-                    rate = processed / max(now - started, 1e-9)
-                    print(
-                        f"TX seq={measurement.sequence & 0xFFFF:05d} "
-                        f"status={status:<9} position={position:>8} "
-                        f"error={error:>8} velocity={measurement.velocity_cm_s:+7.2f}cm/s "
-                        f"confidence={measurement.confidence:.2f} "
-                        f"sent={sent} rate={rate:.1f}Hz",
-                        flush=True,
-                    )
-                    last_log_at = now
-                last_valid = measurement.valid
-                if not args.headless:
-                    cv2.imshow("H Ball Vision Serial", annotate(packet.frame, result))
-                    if cv2.waitKey(1) & 0xFF == ord("q"):
+                    if last_valid is None or validity_changed or periodic_log:
+                        status = (
+                            "DETECTED"
+                            if measurement.detected
+                            else "PREDICTED"
+                            if measurement.predicted
+                            else "LOST"
+                        )
+                        position = (
+                            "--" if measurement.position_cm is None else f"{measurement.position_cm:+.2f}cm"
+                        )
+                        error = (
+                            "--" if measurement.error_cm is None else f"{measurement.error_cm:+.2f}cm"
+                        )
+                        rate = processed / max(now - started, 1e-9)
+                        timing_divisor = max(1, timing_samples)
+                        print(
+                            f"TX seq={measurement.sequence & 0xFFFF:05d} "
+                            f"status={status:<9} position={position:>8} "
+                            f"error={error:>8} velocity={measurement.velocity_cm_s:+7.2f}cm/s "
+                            f"confidence={measurement.confidence:.2f} "
+                            f"sent={sent} rate={rate:.1f}Hz "
+                            f"camera={capture.measured_fps:.1f}Hz skipped={skipped_frames} "
+                            f"ms[wait={capture_seconds / timing_divisor * 1000:.1f} "
+                            f"vision={vision_seconds / timing_divisor * 1000:.1f} "
+                            f"serial={serial_seconds / timing_divisor * 1000:.1f} "
+                            f"ui={ui_seconds / timing_divisor * 1000:.1f}]",
+                            flush=True,
+                        )
+                        last_log_at = now
+                        timing_samples = 0
+                        capture_seconds = vision_seconds = serial_seconds = ui_seconds = 0.0
+                    last_valid = measurement.valid
+                    if quit_requested:
                         break
-                if args.max_frames and processed >= args.max_frames:
-                    break
+                    if args.max_frames and processed >= args.max_frames:
+                        break
+            finally:
+                capture.stop()
     except KeyboardInterrupt:
         pass
     finally:
