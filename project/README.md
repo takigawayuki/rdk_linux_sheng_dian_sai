@@ -29,7 +29,7 @@
 - 已用 `Data/rod_recalibration_20260730` 重新完成一维线性映射：100/100 张静态图检测成功，五点 RMSE 为 `0.0526 cm`，最大标定点残差为 `0.0858 cm`。
 - alpha-beta 一维跟踪已完成：最长只允许预测 `0.12 s`，超时输出 LOST，重新捕获要求连续两帧一致。
 - 滚动视频离线通路已跑通：`摄像头录像 -> 检测 -> 跟踪 -> 厘米映射 -> 标注视频/统计结果`。
-- 当前共有 32 个 Python 自动化测试，全部通过。
+- 当前共有 35 个 Python 自动化测试，全部通过。
 - 视觉到控制器的固定 18 字节串口协议、CRC16、实时发送入口和下位机 C 解包说明已完成。
 - PC 串口助手双向联调工具已完成，支持任意字节回显、连续 18 字节测试包和 `PING/PONG` 反向确认。
 
@@ -38,7 +38,7 @@
 - 当前映射误差是标定点残差，还没有使用独立位置测试集验证最终厘米精度。
 - `20260730_074905_hand_occlusion` 中手主要在凹槽下方，钢球仍然可见，因此只验证了手部邻近干扰，没有充分验证长时间完全遮挡。
 - 检测置信度平均值偏低，当前数值还不能直接解释为识别正确概率。
-- 预测窗口优化后，现有滚动视频的离线算法速度约 `123.8 FPS`，已越过 120 FPS。最新无界面真机测试为 `camera=32.9 Hz、rate≈30.9 Hz`；视觉约 `2 ms`、串口约 `0.4 ms`，当前瓶颈是摄像头实际送帧速度，不是视觉或串口。
+- 预测窗口优化后，现有滚动视频的离线算法速度约 `123.8 FPS`。真机将 V4L2 缓冲从1改为3后，`camera_fps` 和 `tx_fps` 均稳定在约 `59～63 Hz`；视觉约 `2～5 ms`、串口约 `0.3～0.6 ms`，完整通路已经达到约60 Hz。
 - 实时入口已经拆成“原始读帧线程 -> 去畸变线程 -> 视觉/串口线程”三级流水线；级间只保留最新帧，避免旧画面排队，仍需在 `/dev/video0 + /dev/ttyS1` 真机上重新测量。
 - Workbench 已完成“球位置外环 + 步进电机角度位置内环 + 滚球动力学”的二维动态动画，控制与物理积分为 120 Hz，画面渲染约 30 FPS。
 
@@ -99,6 +99,7 @@ project/
 ├── Driver/
 │   ├── __init__.py
 │   ├── camera.py
+│   ├── buzzer.py                       # GPIO16低电平触发蜂鸣器
 │   ├── my_serial.py
 │   ├── vision_protocol.py              # 18 字节帧和 CRC16
 │   ├── configs/
@@ -126,6 +127,7 @@ project/
 │   ├── collect_samples.py              # 真机采集
 │   ├── calibrate_rod.py                # 静态样本拟合映射
 │   ├── evaluate_vision.py              # 视频离线评估
+│   ├── buzzer_test.py                  # 蜂鸣器真机测试
 │   ├── send_vision_packet.py           # 固定串口帧联调工具
 │   ├── serial_duplex_test.py           # PC 串口助手双向测试
 │   └── run_vision_serial.py            # 实时相机到串口入口
@@ -139,6 +141,7 @@ project/
 ├── Test/
 │   ├── __init__.py
 │   ├── test_camera.py
+│   ├── test_buzzer.py
 │   ├── test_ball_detector.py
 │   ├── test_ball_tracker.py
 │   ├── test_rod_mapper.py
@@ -203,7 +206,7 @@ FramePacket(
 
 - 使用 V4L2 打开摄像头。
 - 请求 MJPG、`640×480 @ 120 FPS`。
-- 将 OpenCV 缓冲深度设置为 1，减少旧帧积压。
+- 将 V4L2/OpenCV 驱动缓冲深度设置为3；实测单缓冲只能约30 Hz，三缓冲可达到约60 Hz。用户态各处理级仍只保留最新帧，避免旧图排队。
 - 设置可选的曝光、增益、白平衡和对焦参数。
 - 加载 `camera_calibration.npz`。
 - 对每一帧执行去畸变，然后按配置旋转。
@@ -234,6 +237,17 @@ camera.close()
 ```
 
 两种方式调用的是同一个 `Camera`，没有维护第二套摄像头代码。
+
+#### `Driver/buzzer.py`
+
+这是GPIO16低电平触发蜂鸣器的可复用驱动。当前RDK的 `GPIO16` 是 `BCM 16`，对应物理排针 `BOARD 36`；不要把它接到物理16号脚。驱动初始化和退出时都会输出高电平关闭蜂鸣器，异常退出也会执行清理。
+
+```python
+from project.Driver.buzzer import Buzzer
+
+with Buzzer() as buzzer:
+    buzzer.beep(0.2)
+```
 
 #### `Driver/calibration/camera_calibration.npz`
 
@@ -776,7 +790,7 @@ processing: about 123.8 FPS on the current machine
 
 尾部第 1079 帧以后钢球已经离开画面，手仍在附近，程序保持 LOST 而没有误锁到手；开头 12 帧也没有稳定钢球候选。检测器建立跟踪后只在预测位置附近执行 Hough，并只转换搜索 ROI 的灰度图；优化前后检测统计保持一致，离线速度由约 97 FPS 提升到约 123.8 FPS。
 
-离线 123.8 FPS 不代表真机完整通路已经达到 120 Hz。上一版日志测得约 `camera=32.9 Hz、rate≈30.9 Hz`，并且 `wait≈28 ms、vision≈2 ms、serial≈0.4 ms`。新版日志进一步拆分为 `read` 和 `undistort`，需要用下一次真机结果最终判断是摄像头读帧还是去畸变限制了产出速度。
+离线 123.8 FPS 不代表真机完整通路达到120 Hz。最新真机三缓冲结果为 `camera_fps≈59～63 Hz、tx_fps≈59～63 Hz`，`read≈16 ms、undistort≈5.8 ms、vision≈2～5 ms、serial≈0.4 ms`。采集、矫正、视觉在独立线程重叠执行，因此实际发送可以跟上约60 Hz原始采集。
 
 ### 20.2 生成短标注预览
 
@@ -1054,7 +1068,7 @@ python3 -m project.Tools.run_vision_serial \
 终端重点看新版实时窗口统计：
 
 ```text
-tx_fps=32.8 camera_fps=32.9 avg=30.9 skipped=0 preprocess_dropped=0 ms[wait=28.0 read=27.0 undistort=1.0 vision=2.1 serial=0.3 ui=0.0]
+tx_fps=61.7 camera_fps=61.7 avg=48.0 skipped=3 preprocess_dropped=3 ms[wait=13.8 read=16.0 undistort=5.8 vision=2.0 serial=0.3 ui=0.0]
 ```
 
 - `camera_fps`：最近 0.5 秒后台采集线程实际取得新图像的频率。
@@ -1064,7 +1078,7 @@ tx_fps=32.8 camera_fps=32.9 avg=30.9 skipped=0 preprocess_dropped=0 ms[wait=28.0
 - `preprocess_dropped`：去畸变线程来不及时被最新原始帧覆盖的累计数量；增加说明矫正慢于原始采集，但系统仍使用最新帧而不会积累延迟。
 - `wait/read/undistort/vision/serial/ui`：等待相机、原始读帧、矫正、视觉、串口写入、界面显示的平均毫秒数。
 
-上一版实测 `camera=32.9 Hz、rate≈30.9 Hz`，而 `vision≈2 ms、serial≈0.4 ms`。请用新版再测一次，通过 `read` 和 `undistort` 判断具体瓶颈。
+最新实测在 `--buffer-size 3` 下，`camera_fps` 与 `tx_fps` 同为约 `59～63 Hz`。累计 `skipped=3、preprocess_dropped=3` 很小，说明三级流水线基本跟得上；`avg` 较低只是启动阶段耗时尚未完全摊薄。当前约60 Hz上限主要对应 `read≈16 ms` 的原始取帧周期。
 
 只用于定位去畸变开销的对照命令：
 
@@ -1215,3 +1229,57 @@ PC 使用 ASCII 发送 `PING`，RDK 应回复 `PONG`，用于确认发送视觉�
 - 收到乱码：确认两端都是 `115200、8N1、无校验、无流控`。
 - 只能单向通信：重点检查 TX/RX 是否交叉以及 GND 是否相连。
 - 串口被占用：同一时间只能运行 `serial_duplex_test`、`send_vision_packet`、`run_vision_serial` 中的一个程序，并检查 UART1 是否被系统调试终端占用。
+
+## 24. GPIO16低电平蜂鸣器
+
+### 24.1 接线与电平
+
+当前默认配置：
+
+```text
+GPIO编号模式：BCM
+信号引脚：GPIO16
+物理排针：BOARD 36
+低电平：蜂鸣器响
+高电平：蜂鸣器关闭
+```
+
+低电平触发蜂鸣器模块通常连接 `SIG、VCC、GND`。RDK与模块必须共地，GPIO只连接模块信号输入。先确认模块信号脚兼容3.3 V；不要用GPIO直接驱动超过引脚允许电流的裸蜂鸣器，应使用带驱动三极管的模块或外接驱动电路。
+
+### 24.2 真机测试
+
+当前 `Hobot.GPIO` 通过 `/sys/class/gpio` 工作，普通用户没有导出GPIO的权限，因此使用 `sudo`：
+
+```bash
+cd /home/sunrise/rdk_linux_sheng_dian_sai
+
+sudo python3 -m project.Tools.buzzer_test \
+  --pin 16 \
+  --numbering BCM \
+  --duration 0.2 \
+  --count 3 \
+  --gap 0.15
+```
+
+作用：蜂鸣器响 `0.2 s`、停 `0.15 s`，重复3次，最后将GPIO恢复为高电平并释放。
+
+只响一次可以简化为：
+
+```bash
+sudo python3 -m project.Tools.buzzer_test --duration 0.2
+```
+
+如果接线使用物理针脚编号，也可以写 `--numbering BOARD --pin 36`，它与当前板上的 `BCM 16` 是同一个GPIO。不要使用 `--numbering BOARD --pin 16`。
+
+### 24.3 在其他代码中调用
+
+```python
+from project.Driver.buzzer import Buzzer
+
+with Buzzer() as buzzer:
+    buzzer.on()       # 输出LOW，开始响
+    buzzer.off()      # 输出HIGH，停止响
+    buzzer.beep(0.2)  # 响0.2秒后自动关闭
+```
+
+推荐使用 `with`，确保正常退出、异常和 `Ctrl+C` 时都执行高电平关闭及单引脚 `cleanup()`。

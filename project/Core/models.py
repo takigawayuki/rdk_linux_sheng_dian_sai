@@ -16,7 +16,7 @@ class CameraConfig:
     height: int = 480
     fps: float = 120.0
     fourcc: str = "MJPG"
-    buffer_size: int = 1
+    buffer_size: int = 3
     rotation: int = 0
     undistort: bool = True
     calibration_file: Optional[str] = None

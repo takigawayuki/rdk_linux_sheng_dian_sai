@@ -31,7 +31,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--height", type=int, default=480)
     parser.add_argument("--fps", type=float, default=120.0)
     parser.add_argument("--fourcc", default="MJPG")
-    parser.add_argument("--buffer-size", type=int, default=1)
+    parser.add_argument("--buffer-size", type=int, default=3)
     parser.add_argument("--no-undistort", action="store_true")
     parser.add_argument("--auto-exposure", type=float)
     parser.add_argument("--exposure", type=float)

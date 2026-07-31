@@ -104,6 +104,7 @@ class CameraTests(unittest.TestCase):
 
     def test_default_target_is_120_fps(self):
         self.assertEqual(CameraConfig().fps, 120.0)
+        self.assertEqual(CameraConfig().buffer_size, 3)
 
     def test_config_rejects_invalid_rotation(self):
         with self.assertRaises(ValueError):
