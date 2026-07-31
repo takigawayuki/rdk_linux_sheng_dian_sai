@@ -29,7 +29,7 @@
 - 已用 `Data/rod_recalibration_20260730` 重新完成一维线性映射：100/100 张静态图检测成功，五点 RMSE 为 `0.0526 cm`，最大标定点残差为 `0.0858 cm`。
 - alpha-beta 一维跟踪已完成：最长只允许预测 `0.12 s`，超时输出 LOST，重新捕获要求连续两帧一致。
 - 滚动视频离线通路已跑通：`摄像头录像 -> 检测 -> 跟踪 -> 厘米映射 -> 标注视频/统计结果`。
-- 当前共有 31 个 Python 自动化测试，全部通过。
+- 当前共有 32 个 Python 自动化测试，全部通过。
 - 视觉到控制器的固定 18 字节串口协议、CRC16、实时发送入口和下位机 C 解包说明已完成。
 - PC 串口助手双向联调工具已完成，支持任意字节回显、连续 18 字节测试包和 `PING/PONG` 反向确认。
 
@@ -282,15 +282,15 @@ camera.close()
 
 #### `Algorithm/KalmanFilter2D.py`
 
-这是参考工程留下的二维卡尔曼实现，目前没有接入第一步流程，也不是最终钢球滤波器。
+这是参考工程留下的多点二维 OpenCV 卡尔曼示例，目前不接入滚球控制。它没有针对本题完成过程噪声、后验协方差、初始化和丢测策略，直接与现有滤波串联容易增加相位滞后。
 
-第四步会针对本题新增一维状态：
+当前 `Algorithm/ball_tracker.py` 已使用针对本题的一维 alpha-beta 常速度跟踪器，状态相当于：
 
 ```text
 [钢球位置 x_cm, 钢球速度 vx_cm_s]
 ```
 
-不要因为目录中存在该文件，就认为当前采集工具已经使用了卡尔曼滤波。
+alpha-beta 是常速度卡尔曼滤波的一种简化形式，已经负责平滑速度、短遮挡预测和重捕获。控制前视在这个稳定状态之后计算 `x_control = x + v·T`，不再叠加旧二维卡尔曼。
 
 ### 4.4 `Services`：可以复用的业务服务
 
@@ -953,6 +953,15 @@ main.py
 error_cm = target_position_cm - position_cm
 ```
 
+当启用控制前视时，串口字段中的 `position_cm` 是控制位置：
+
+```text
+control_position_cm = filtered_position_cm + velocity_cm_s * lookahead_seconds
+error_cm = target_position_cm - control_position_cm
+```
+
+前视关闭时 `control_position_cm = filtered_position_cm`。这样下位机始终保持 `error=target-position`，不需要修改 PID 公式。
+
 实时视觉入口统一采用以下控制坐标：
 
 ```text
@@ -1010,6 +1019,7 @@ python3 -m project.Tools.run_vision_serial \
   --baudrate 115200 \
   --target-cm 0 \
   --position-direction 1 \
+  --lookahead-ms 0 \
   --headless \
   --log-interval 0.5
 ```
@@ -1019,10 +1029,27 @@ python3 -m project.Tools.run_vision_serial \
 `--position-direction 1` 与当前新标定一致；它也是代码默认值，可以省略。启动后终端会打印：
 
 ```text
-coordinates calibration-label direction=+1 scale=1 error=target-position
+coordinates calibration-label direction=+1 scale=1 lookahead=0ms error=target-control_position
 ```
 
 把球放回采集时标为 `+5 cm` 的一侧，确认 TX 日志中的 `position≈+5 cm`；放到 `-5 cm` 一侧应为约 `-5 cm`。不要只根据相机画面左右判断，也不要同时修改下位机误差符号或 `Kp` 符号。
+
+题3位置前视先从 `30 ms` 开始测试：
+
+```bash
+python3 -m project.Tools.run_vision_serial \
+  --device /dev/video0 \
+  --width 640 --height 480 --fps 120 --fourcc MJPG \
+  --serial-port /dev/ttyS1 \
+  --baudrate 115200 \
+  --target-cm 5 \
+  --position-direction 1 \
+  --lookahead-ms 30 \
+  --preview-fps 30 \
+  --log-interval 0.5
+```
+
+终端中的 `position` 是当前滤波位置，`control` 是实际装入串口包的前视位置。先断开电机动力，确认球向正方向运动时 `control > position`、向负方向运动时 `control < position`。稳定后按 `30 -> 50 -> 80 ms` 小步增加；出现提前反向或到不了目标时减小。
 
 终端重点看新版实时窗口统计：
 

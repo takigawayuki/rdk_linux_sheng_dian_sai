@@ -84,6 +84,8 @@ class BallMeasurement:
     predicted: bool = False
     target_position_cm: float = 0.0
     error_cm: Optional[float] = None
+    control_position_cm: Optional[float] = None
+    lookahead_seconds: float = 0.0
 
 
 @dataclass(frozen=True)

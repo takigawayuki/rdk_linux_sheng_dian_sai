@@ -58,6 +58,7 @@ class VisionPipelineTests(unittest.TestCase):
         measurement = result.measurement
         self.assertAlmostEqual(measurement.position_cm, 1.0)
         self.assertAlmostEqual(measurement.velocity_cm_s, 2.0)
+        self.assertAlmostEqual(measurement.control_position_cm, 1.0)
         self.assertAlmostEqual(measurement.error_cm, 1.0)
         self.assertTrue(measurement.valid)
         self.assertEqual(measurement.sequence, 12)
@@ -83,6 +84,28 @@ class VisionPipelineTests(unittest.TestCase):
         self.assertAlmostEqual(result.measurement.velocity_cm_s, -1.0)
         self.assertAlmostEqual(result.measurement.error_cm, 2.5)
 
+    def test_control_lookahead_uses_filtered_velocity_before_error(self):
+        track = BallTrack(
+            valid=True,
+            pixel_x=335.0,
+            pixel_y=248.0,
+            velocity_x_px_s=50.0,
+            confidence=0.8,
+            detected=True,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            pipeline = self.make_pipeline(
+                directory, track, control_lookahead_seconds=0.05
+            )
+            result = pipeline.process(
+                FramePacket(np.zeros((10, 10, 3), dtype=np.uint8), 1.5, 12),
+                target_position_cm=2.0,
+            )
+        self.assertAlmostEqual(result.measurement.position_cm, 1.0)
+        self.assertAlmostEqual(result.measurement.velocity_cm_s, 2.0)
+        self.assertAlmostEqual(result.measurement.control_position_cm, 1.1)
+        self.assertAlmostEqual(result.measurement.error_cm, 0.9)
+
     def test_lost_track_has_no_position_or_error(self):
         with tempfile.TemporaryDirectory() as directory:
             pipeline = self.make_pipeline(directory, BallTrack(valid=False))
@@ -91,6 +114,7 @@ class VisionPipelineTests(unittest.TestCase):
             )
         self.assertFalse(result.measurement.valid)
         self.assertIsNone(result.measurement.position_cm)
+        self.assertIsNone(result.measurement.control_position_cm)
         self.assertIsNone(result.measurement.error_cm)
 
 

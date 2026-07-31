@@ -50,6 +50,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=1.0,
         help="positive scale applied after pixel-to-centimetre calibration",
     )
+    parser.add_argument(
+        "--lookahead-ms",
+        type=float,
+        default=0.0,
+        help="constant-velocity control lookahead in milliseconds (0 to 200)",
+    )
     parser.add_argument("--headless", action="store_true")
     parser.add_argument(
         "--preview-fps",
@@ -83,11 +89,26 @@ def annotate(frame, result):
         color = (40, 210, 80) if result.track.detected else (0, 180, 255)
         cv2.circle(output, center, 13, color, 2)
     status = "DETECTED" if measurement.detected else "PREDICTED" if measurement.predicted else "LOST"
-    value = "--" if measurement.error_cm is None else f"{measurement.error_cm:+.2f} cm"
+    position = "--" if measurement.position_cm is None else f"{measurement.position_cm:+.2f}"
+    control = (
+        "--"
+        if measurement.control_position_cm is None
+        else f"{measurement.control_position_cm:+.2f}"
+    )
+    error = "--" if measurement.error_cm is None else f"{measurement.error_cm:+.2f}"
     cv2.putText(
         output,
-        f"serial {status}  error={value}  seq={measurement.sequence & 0xFFFF}",
+        f"serial {status}  seq={measurement.sequence & 0xFFFF}",
         (12, 30),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.55,
+        (40, 220, 80),
+        2,
+    )
+    cv2.putText(
+        output,
+        f"x={position}  control={control}  error={error} cm",
+        (12, 55),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.55,
         (40, 220, 80),
@@ -106,6 +127,8 @@ def main() -> int:
         raise SystemExit("--preview-fps must be positive; use --headless to disable it")
     if args.position_scale <= 0:
         raise SystemExit("--position-scale must be positive")
+    if not 0.0 <= args.lookahead_ms <= 200.0:
+        raise SystemExit("--lookahead-ms must be between 0 and 200")
     if args.width <= 0 or args.height <= 0 or args.fps <= 0:
         raise SystemExit("camera width, height and FPS must be positive")
     if len(args.fourcc) != 4:
@@ -116,6 +139,7 @@ def main() -> int:
         args.calibration,
         position_direction=args.position_direction,
         position_scale=args.position_scale,
+        control_lookahead_seconds=args.lookahead_ms / 1000.0,
     )
     camera_config = CameraConfig(
         device=args.device,
@@ -161,7 +185,8 @@ def main() -> int:
                 )
             print(
                 f"coordinates calibration-label direction={args.position_direction:+.0f} "
-                f"scale={args.position_scale:g} error=target-position",
+                f"scale={args.position_scale:g} lookahead={args.lookahead_ms:g}ms "
+                f"error=target-control_position",
                 flush=True,
             )
             for warning in camera.mode_warnings():
@@ -179,7 +204,7 @@ def main() -> int:
                     vision_finished = time.monotonic()
                     measurement = result.measurement
                     ok = serial_link.send_vision_state(
-                        position_cm=measurement.position_cm,
+                        position_cm=measurement.control_position_cm,
                         target_position_cm=measurement.target_position_cm,
                         velocity_cm_s=measurement.velocity_cm_s,
                         valid=measurement.valid,
@@ -224,6 +249,11 @@ def main() -> int:
                         error = (
                             "--" if measurement.error_cm is None else f"{measurement.error_cm:+.2f}cm"
                         )
+                        control_position = (
+                            "--"
+                            if measurement.control_position_cm is None
+                            else f"{measurement.control_position_cm:+.2f}cm"
+                        )
                         window_seconds = max(now - last_log_at, 1e-9)
                         capture_count = capture.captured_count
                         tx_fps = (processed - last_log_processed) / window_seconds
@@ -233,6 +263,7 @@ def main() -> int:
                         print(
                             f"TX seq={measurement.sequence & 0xFFFF:05d} "
                             f"status={status:<9} position={position:>8} "
+                            f"control={control_position:>8} "
                             f"error={error:>8} velocity={measurement.velocity_cm_s:+7.2f}cm/s "
                             f"confidence={measurement.confidence:.2f} "
                             f"sent={sent} tx_fps={tx_fps:.1f} camera_fps={camera_fps:.1f} "
