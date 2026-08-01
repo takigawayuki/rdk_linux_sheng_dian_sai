@@ -16,7 +16,7 @@ class MySerial:
     def __init__(
         self,
         port,
-        baudrate=115200,
+        baudrate=921600,
         timeout=0.0,
         write_timeout=0.05,
         serial_factory=serial.Serial,

@@ -19,7 +19,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="Test two-way serial traffic with a PC serial assistant."
     )
     parser.add_argument("--serial-port", required=True)
-    parser.add_argument("--baudrate", type=int, default=115200)
+    parser.add_argument("--baudrate", type=int, default=921600)
     parser.add_argument("--mode", choices=("echo", "packet"), default="echo")
     parser.add_argument("--interval", type=float, default=0.5)
     parser.add_argument("--duration", type=float, default=0.0, help="0 runs until Ctrl+C")

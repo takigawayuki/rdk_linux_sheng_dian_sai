@@ -25,7 +25,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="Send one 18-byte ball-state packet after every processed camera frame."
     )
     parser.add_argument("--serial-port", required=True, help="for example /dev/ttyS1")
-    parser.add_argument("--baudrate", type=int, default=115200)
+    parser.add_argument("--baudrate", type=int, default=921600)
     parser.add_argument("--device", default="/dev/video0")
     parser.add_argument("--width", type=int, default=640)
     parser.add_argument("--height", type=int, default=480)

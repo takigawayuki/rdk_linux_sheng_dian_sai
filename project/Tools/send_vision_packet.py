@@ -24,7 +24,7 @@ STATUS_BY_NAME = {
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Send a fixed 18-byte vision packet.")
     parser.add_argument("--serial-port", help="for example /dev/ttyS1")
-    parser.add_argument("--baudrate", type=int, default=115200)
+    parser.add_argument("--baudrate", type=int, default=921600)
     parser.add_argument("--status", choices=STATUS_BY_NAME, default="lost")
     parser.add_argument("--error-cm", type=float, default=0.0)
     parser.add_argument("--position-cm", type=float, default=0.0)
